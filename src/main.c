@@ -1,5 +1,6 @@
 #include <iron/full.h>
 
+
 typedef enum WASM_SECTION{
   WASM_CUSTOM_SECTION = 0,
   WASM_TYPE_SECTION,
@@ -253,7 +254,7 @@ wasm_module * load_wasm_module(wasm_heap * heap, void * _data, size_t size){
 	u32 length = readu32();
 	u32 guard = size;
 	u32 importCount = readu32();
-	printf("Import count: %i\n", importCount);
+	logd("Import count: %i\n", importCount);
 	for(u32 i = 0; i < importCount; i++){
 	  char * modulename = readname();
 	  char * name = readname();
@@ -263,7 +264,7 @@ wasm_module * load_wasm_module(wasm_heap * heap, void * _data, size_t size){
 	    {
 
 	      u32 typeindex = readu32();
-	      printf("IMPORT FUNC: %s %s %i\n", modulename, name, typeindex);
+	      logd("IMPORT FUNC: %s %s %i\n", modulename, name, typeindex);
 	      // imported funcs comes before defined ones.
 	      wasm_module_add_func(&module);
 	      wasm_function * f = module.func + module.import_func_count;
@@ -288,7 +289,7 @@ wasm_module * load_wasm_module(wasm_heap * heap, void * _data, size_t size){
 		min = readu32();
 		max = readu32();
 	      }
-	      printf("TABLE: %i %i\n", min, max, elemtype);
+	      logd("TABLE: %i %i\n", min, max, elemtype);
 	      ERROR("Not supported");
 	    }
 	    break;
@@ -301,7 +302,7 @@ wasm_module * load_wasm_module(wasm_heap * heap, void * _data, size_t size){
 		max = readu32();
 	      }
 	      
-	      printf("IMPORT MEMORY: %i %i %i\n", hasMax, min, max);
+	      logd("IMPORT MEMORY: %i %i %i\n", hasMax, min, max);
 	      
 	      break;
 	    }
@@ -309,7 +310,7 @@ wasm_module * load_wasm_module(wasm_heap * heap, void * _data, size_t size){
 	    {
 	      wasm_type type = (wasm_type) read1();
 	      bool mut = read1();
-	      printf("IMPORT GLOBAL: %s %s %s %i\n", module, name, mut ? "mutable" : "const", type);
+	      logd("IMPORT GLOBAL: %s %s %s %i\n", module, name, mut ? "mutable" : "const", type);
 	      break;
 	    }
 	  }
@@ -335,7 +336,7 @@ wasm_module * load_wasm_module(wasm_heap * heap, void * _data, size_t size){
 
 	      size_t local_func_index = module.local_func_count;
 	      module.local_func_count += 1;
-	      printf("EXPORT %s %i %i\n", name, index, local_func_index + module.import_func_count);
+	      logd("EXPORT %s %i %i\n", name, index, local_func_index + module.import_func_count);
 	      wasm_module_add_func(&module);
 	      module.func[index].name = name;
 	      break;
@@ -348,13 +349,13 @@ wasm_module * load_wasm_module(wasm_heap * heap, void * _data, size_t size){
 	  case WASM_IMPORT_MEM:
 	    {
 	      u32 memory_index = readu32();
-	      printf("MEMORY %i\n", memory_index);
+	      logd("MEMORY %i\n", memory_index);
 	      break;
 	    }
 	  case WASM_IMPORT_GLOBAL:
 	    {
 	      u32 global_index = readu32();
-	      printf("GLOBAL %i\n", global_index);
+	      logd("GLOBAL %i\n", global_index);
 	      break;			 
 	    }
 	  }
@@ -418,7 +419,7 @@ wasm_module * load_wasm_module(wasm_heap * heap, void * _data, size_t size){
 	    switch(instr){
 	    case WASM_INSTR_END:
 	      blocks -= 1;
-	      printf("BLOCK LEVEL: %i\n", blocks);
+	      logd("BLOCK LEVEL: %i\n", blocks);
 	      break;
 	    case WASM_INSTR_NOP:
 	      break;
@@ -546,7 +547,7 @@ wasm_module * load_wasm_module(wasm_heap * heap, void * _data, size_t size){
 	end_read:;
 
 	  u32 bytecount = readu32();
-	  printf("DATA SECTION: %i %i %s\n", offset, bytecount, isGlobal ? "global" : "local");
+	  logd("DATA SECTION: %i %i %s\n", offset, bytecount, isGlobal ? "global" : "local");
 	  wasm_heap_min_capacity(module.heap, bytecount + offset);
 	  read(module.heap->heap + offset, bytecount);
 	  
@@ -581,8 +582,10 @@ void wasm_push_data(wasm_execution_context * ctx, void * data, size_t size){
   size_t new_size = ctx->stack_ptr + (size + 7) / 8;
   if(new_size > ctx->stack_capacity){
     ctx->stack = realloc(ctx->stack, 8 * (ctx->stack_capacity = (ctx->stack_capacity + 1) * 2));
+    logd("increasing stack to %i\n", ctx->stack_capacity);
   }
-  memset(ctx->stack + ctx->stack_ptr, 0, sizeof(ctx->stack[0]));
+  if(size < 8)
+    memset(ctx->stack + ctx->stack_ptr, 0, sizeof(ctx->stack[0]));
   memmove(ctx->stack + ctx->stack_ptr, data, size);
   ctx->stack_ptr = new_size;
 }
@@ -609,14 +612,14 @@ void wasm_pop_i32(wasm_execution_context * ctx, i32 * out){
 
 void wasm_pop_u64(wasm_execution_context * ctx, u64 * out){
   wasm_pop_data(ctx, out);
-  printf("WASM POP u64: %p\n", *out);
+  logd("WASM POP u64: %p\n", *out);
 }
 
 void wasm_push_u64(wasm_execution_context * ctx, u64 in){
   wasm_push_data(ctx, &in, sizeof(in));
 }
 void wasm_push_u64r(wasm_execution_context * ctx, u64 * in){
-  printf("PUSH u64r: %p\n", *in);
+  logd("PUSH u64r: %p\n", *in);
   wasm_push_data(ctx, in, sizeof(in[0]));
 }
 //awsm VM
@@ -687,14 +690,14 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
     wasm_pop_u64(ctx, locals + i);
   }
 
-  printf("LOCAL COUNT: %i\n", localcount);
+  logd("LOCAL COUNT: %i\n", localcount);
   
   UNUSED(readi32);
 
-
+  UNUSED(codelen);
   while(offset < codelen){
     wasm_instr instr = read1();
-    printf("INSTRUCTION: %x\n", instr);
+    logd("INSTRUCTION: %x\n", instr);
     switch(instr){
     case WASM_INSTR_BLOCK:
       {
@@ -724,7 +727,7 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 	if(block == 0)
 	  return;
 	block -= 1;
-	printf("END LOOP\n");
+	logd("END LOOP\n");
       }
       break;
     case WASM_INSTR_BR:
@@ -761,9 +764,6 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 	  case 0:{
 	    i32 ptr = 0;
 	    wasm_pop_i32(ctx, &ptr);
-	    //wasm_pop_i32(ctx, &ptr);
-	    //wasm_pop_i32(ctx, &ptr);
-	    //wasm_pop_i32(ctx, &ptr);
 	    printf("Result: %i\n", ptr);
 	    break;
 	  case 1:
@@ -813,7 +813,7 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
       {
 	u32 local = readu32();
 	ASSERT(local < localcount);
-	printf("Local set: %i\n", local);
+	logd("Local set: %i\n", local);
 	wasm_pop_u64(ctx, locals + local);
 	break;
       }
@@ -821,7 +821,7 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
       {
 
 	u32 local = readu32();
-	printf("LOCAL GET %i\n", local);
+	logd("LOCAL GET %i\n", local);
 	ASSERT(local < localcount);
 	wasm_push_u64r(ctx, locals + local);
 	break;
@@ -865,7 +865,7 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
       case WASM_INSTR_I32_CONST:
       {
 	i32 x = readi32();
-	printf("I32 CONST: %i\n", x);
+	logd("I32 CONST: %i\n", x);
 	wasm_push_i32(ctx, x);
       }
       break;
@@ -882,7 +882,7 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 	wasm_pop_i32(ctx, &a);
 	wasm_pop_i32(ctx, &b);
 	//ERROR("WTF %i %i\n", a, b);
-	printf("%i == %i\n", a, b);
+	logd("%i == %i\n", a, b);
 	wasm_push_i32(ctx, a != b);
       }
       break;
@@ -927,8 +927,6 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 	wasm_push_i32(ctx, a & b);
       }
       break;
-     
-      
     
     default:
       ERROR("Cannot execute opcode %x", instr);
@@ -940,54 +938,56 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 int main(int argc, char ** argv){
 
   wasm_execution_context ctx ={0};
-  /*wasm_push_i32(&ctx,80);
-  wasm_push_i32(&ctx,20);
-  u8 some_code[] = {WASM_INSTR_I32_ADD, WASM_INSTR_CALL, 1};
-  wasm_exec_code(&ctx, some_code, sizeof(some_code));
-  */
-  //return 0;
-
-
-  if(argc == 1){
-    printf("--\n");
-    return 0;
-  }
-  char * file = argv[1];
-  printf("'%s'\n", file);
-
+  char * file = NULL;
   char * entrypoint = NULL;
-  if(argc > 2){
-    entrypoint = argv[2];
+  bool diagnostic = false;
+  for(int i = 1; i < argc; i++){
+    if(strcmp(argv[i], "--diagnostic") == 0){
+      diagnostic = true;
+      continue;
+    }
+    if(file == NULL)
+      file = argv[i];
+    else if(entrypoint == NULL)
+      entrypoint = argv[i];
   }
+  if(file == NULL)
+    goto print_help;
+  if(!diagnostic)
+    logd_enable = false;
   
   size_t buffer_size = 0;
   void * data = read_file_to_buffer(file, &buffer_size);
-  UNUSED(data);
-  logd("Size: %i\n", buffer_size);
   wasm_heap heap = {0};
   wasm_module * mod = load_wasm_module(&heap, data, buffer_size);
   ctx.module = mod;
-  printf("heap size: %i\n", heap.capacity);
+  logd("heap size: %i\n", heap.capacity);
   int funcindex = -1;
+  if(entrypoint == NULL)
+    return 0;
   for(size_t i = 0; i < mod->func_count; i++){
     if(mod->func[i].name != NULL){
-      printf("Function %i: %s\n", i, mod->func[i].name);
+      logd("Function %i: %s\n", i, mod->func[i].name);
       if(strcmp(mod->func[i].name, entrypoint) == 0){
-	printf("Execute this\n");
+	logd("Execute this\n");
 	funcindex = i;
       }
     }
   }
+  
   if(funcindex != -1){
-    printf("Executing...\n");
+    logd("Executing...\n");
     wasm_push_i32(&ctx, 0);
     wasm_push_i32(&ctx, 0);
     u8 some_code[] = {WASM_INSTR_CALL, (u8) funcindex};
     wasm_exec_code(&ctx, some_code, sizeof(some_code), false, 0);
-
   }
   
   
   
   return 0;
+
+ print_help:
+  printf("Usage: awsm [file] [entrypoint] [--diagnostic] \n");
+  return 1;
 }

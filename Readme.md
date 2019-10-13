@@ -23,3 +23,10 @@
 "Hello World!"
 
 ```
+
+**Performance** After a bit of tuning: ~350M instructions/s. Will do a more accurate measurement at a later point.
+
+- -O3 has an performance improvement of a factor two over -O2.
+- -O2 has an perfromance improvement of a factor 5 over -O0.
+
+Overall surprised that it performs at this level.

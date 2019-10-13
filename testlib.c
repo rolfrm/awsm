@@ -7,34 +7,30 @@ int myvalue = 100;
 char * globthing = "hellohello";
 int add_things(int x, int y){
   
-  int ptr = 10;
-  /*  if(x > y)
-    ptr = 1;
-  else
-    ptr = 2;
-  for(int i = 0; i < myvalue; i++){
-    ptr += i;
-    }*/
+  int it = 10;
   
   for(int i = 0; i < 5; i++)
     print3(i);
-  while(1)
-    print3(ptr);  
-  return x + y + myvalue - 3 + (int) ptr;
+  while(1){
+    print3(it);
+    it += 1;
+  }
+  return x + y + myvalue - 3 + (int) it;
 }
 
 
 int add_things2(int x, int y){
-  int ptr = 10;
+  int cnst = 10;
   for(int i = 0; i < 3; i++)
-    print3(ptr);
-  return x + y + ptr;
+    print3(i + cnst);
+  return x + y + cnst;
 }
 
 
 int main(){
   add_things2(6, 5);
   print("\"Hello World!\"\n");
+  //add_things(3, 4);
   //megaprinter3(add_things(6, 5));
   return 0;
 }
