@@ -5,6 +5,9 @@ void print_i32(int val);
 void require_i32(int expected, int actual);
 int myvalue = 100;
 char * globthing = "hellohello";
+void fail(){
+  require_i32(1,0);
+}
 int add_things(int x, int y){
   
   int it = 10;
@@ -26,9 +29,17 @@ int add_things2(int x, int y){
   return x - y + cnst;
 }
 
+int fib(int n){
+  if(n <2)
+    return 1;
+  return fib(n - 1) + fib(n - 2);
+}
+
 void test_math(int five, int seven){
   require_i32(5, five);
+  require_i32(-5, -five);
   require_i32(7, seven);
+  require_i32(-7, -seven);
   require_i32(5 + 7, five + seven);
   require_i32(5 - 7, five - seven);
   require_i32(5 * 7, five * seven);
@@ -40,8 +51,13 @@ void test_math(int five, int seven){
   require_i32(5 ^ 7, five ^ seven);
   require_i32(5 << 7, five << seven);
   require_i32((5 * 5 * 5 * 5) >> 7, (five * five * five * five) >> seven);
-
+  require_i32(8, fib(five));
+  require_i32(13, fib(6));
+  require_i32(21, fib(seven));
+  require_i32(233, fib(seven + five));
 }
+
+
 
 int main(){
   //add_things2(6, 5);

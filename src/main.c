@@ -27,7 +27,7 @@ typedef enum WASM_INSTR{
   WASM_INSTR_BR = 0x0C,
   WASM_INSTR_BR_IF = 0x0D,
   WASM_INSTR_BR_TABLE = 0x0E,
-  WASM_INSTR_RET = 0x0F,
+  WASM_INSTR_RETURN = 0x0F,
   WASM_INSTR_CALL = 0x10,
   WASM_INSTR_DROP = 0x1A,
   WASM_INSTR_SELECT = 0x1B,
@@ -39,6 +39,7 @@ typedef enum WASM_INSTR{
   WASM_INSTR_GLOBAL_SET = 0x24,
   WASM_INSTR_I32_LOAD = 0x28,
   WASM_INSTR_I32_STORE = 0x36,
+  WASM_INSTR_I64_STORE32 = 0x3E,
   
   WASM_INSTR_MEMORY_SIZE = 0x3F,
   WASM_INSTR_MEMORY_GROW = 0x40,
@@ -49,8 +50,13 @@ typedef enum WASM_INSTR{
   WASM_INSTR_I32_EQZ = 0x45,
   WASM_INSTR_I32_NE = 0x47,
   WASM_INSTR_I32_LT_S = 0x48,
+  WASM_INSTR_I32_LT_U = 0x49,
   WASM_INSTR_I32_GT_S = 0x4a,
+  WASM_INSTR_I32_GT_U = 0x4B,
+  WASM_INSTR_I32_LE_S = 0x4C,
+  WASM_INSTR_I32_LE_U = 0x4D,
   WASM_INSTR_I32_GE_S = 0x4E,
+  WASM_INSTR_I32_GE_U = 0x4F,
   WASM_INSTR_I32_ADD = 0x6a,
   WASM_INSTR_I32_SUB = 0x6B,
   WASM_INSTR_I32_MUL = 0x6C,
@@ -65,7 +71,8 @@ typedef enum WASM_INSTR{
   WASM_INSTR_I32_SHR_S = 0x75,
   WASM_INSTR_I32_SHR_U = 0x76,
   WASM_INSTR_I32_ROTL = 0x77,
-  WASM_INSTR_I32_ROTR = 0x78
+  WASM_INSTR_I32_ROTR = 0x78,
+  WASM_INSTR_F64_REINTERPRET_I64 = 0xBF
   
   
   
@@ -135,7 +142,9 @@ typedef struct{
 
 void wasm_heap_min_capacity(wasm_heap * heap, size_t capacity){
   if(heap->capacity < capacity){
+    size_t old_capacity = capacity;
     heap->heap = realloc(heap->heap, capacity);
+    memset(heap->heap + old_capacity, 0, capacity - old_capacity);
     heap->capacity = capacity;
   }
 }
@@ -494,7 +503,7 @@ wasm_module * load_wasm_module(wasm_heap * heap, void * _data, size_t size){
 	      read1(); // unused
 	      logd("MEMORY GROW\n");
 	      break;
-	    case WASM_INSTR_RET:
+	    case WASM_INSTR_RETURN:
 	      returned = true;
 	      logd("FUNCTION RETURN\n");
 	      break;
@@ -568,7 +577,7 @@ wasm_module * load_wasm_module(wasm_heap * heap, void * _data, size_t size){
 
 	  u32 bytecount = readu32();
 	  logd("DATA SECTION: %i %i %s\n", offset, bytecount, isGlobal ? "global" : "local");
-	  wasm_heap_min_capacity(module.heap, bytecount + offset);
+	  wasm_heap_min_capacity(module.heap, bytecount + offset + 1);
 	  read(module.heap->heap + offset, bytecount);
 	  
 	  //printf(" %s\n", module.heap->heap + offset);
@@ -652,8 +661,9 @@ void wasm_push_u64r(wasm_execution_context * ctx, u64 * in){
   wasm_push_data(ctx, in, sizeof(in[0]));
 }
 //awsm VM
-
+static int stack_frames = 0;
 void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bool funccall, u32 argcount){
+  stack_frames += 1;
   wasm_module * mod = ctx->module;
   u32 offset = 0;
   u8 read1(){
@@ -662,7 +672,8 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
     return v;
   }
   u32 block = 0;
-  u32 labels[10];
+  u32 labels[20] = {0};
+  u32 label_return[20] = {0};
   void push_label(){
     labels[block] = offset;
   }
@@ -685,32 +696,37 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
     return value;
   }
 
-  i32 readi32(){
+  i64 readi64() {
     // read LEB128
-    u8 chunk = 0;
-    i32 value = 0;
-    u32 offset = 0;
-    while((chunk = read1()) > 0)
-      {
-	value |= (0b01111111 & chunk) << offset;
-	offset += 7;
-	if((0b10000000 & chunk) == false)
-	  break;
-      }
+    i64 value = 0;
+    u32 shift = 0;
+    u8 chunk;
+   do {
+     chunk = read1();
+     value |= (((u64)(chunk & 0x7f)) << shift);
+     shift += 7;
+   } while (chunk >= 128);
+   if (shift < 64 && (chunk & 0x40))
+     value |= (-1ULL) << shift;
+   return value;
+ }
 
-    i32 value2 = (value << (32 - offset)) >>(32 - offset); 
-    return value2;
+  i32 readi32(){
+    return (i32)readi64();
   }
 
 
   u32 localcount = funccall ? readu32() : 0;
+  u32 localcount2 = 0;
   for(u32 j = 0; j < localcount; j++){
     u32 elemcount = readu32();
     u8 type = read1();
+    localcount2 += elemcount;
     //logd("%i of 0x%x\n", elemcount, type);
     UNUSED(type);
     UNUSED(elemcount);
   }
+  localcount = localcount2;
   localcount += argcount;
   u64 locals[localcount];
   for(u32 i = 0; i < localcount; i++)
@@ -724,6 +740,71 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
   UNUSED(readi32);
 
   UNUSED(codelen);
+  wasm_instr move_to_end_of_block(){
+    u32 blk = block;
+    while(offset < codelen){
+      wasm_instr instr = read1();
+      logd("SKIP INSTR: %x\n", instr);
+      if(instr >= WASM_INSTR_LOCAL_GET && instr <= WASM_INSTR_GLOBAL_SET)
+	{
+	// all these has one integer.
+	  readu32(); // should be u64.
+	  continue;
+	}
+      if(instr >= WASM_INSTR_I32_LOAD && instr <= WASM_INSTR_I64_STORE32){
+	  readu32(); // should be u64.
+	  readu32(); // should be u64.
+	  continue;
+      }
+      if(instr >= WASM_INSTR_MEMORY_SIZE && instr <= WASM_INSTR_I64_CONST){
+	readu32();
+	continue;
+      }
+      if(instr >= WASM_INSTR_I32_EQZ && instr <= WASM_INSTR_F64_REINTERPRET_I64){
+	continue;
+      }
+      //f32/64 const 
+      
+      switch(instr){
+      case WASM_INSTR_SELECT:
+      case WASM_INSTR_DROP:
+      case WASM_INSTR_UNREACHABLE:
+      case WASM_INSTR_NOP:
+	break;
+      case WASM_INSTR_BLOCK:
+      case WASM_INSTR_LOOP:
+      case WASM_INSTR_IF:
+	read1();
+	blk += 1;
+	break;
+      case WASM_INSTR_END:
+	if(block == blk)
+	  return instr;
+	blk -= 1;
+	break;
+      case WASM_INSTR_ELSE:
+	if(block == blk)
+	  return instr;
+	break;
+      case WASM_INSTR_BR:
+      case WASM_INSTR_BR_IF:
+	readu32();
+	break;
+      case WASM_INSTR_RETURN:
+	break; // dont return while skip block
+      case WASM_INSTR_CALL:
+	readu32();
+	break;
+      case WASM_INSTR_CALL_INDIRECT:
+	readu32();
+	read1();
+	break;
+      default:
+	ERROR("Unhandled instruction %x\n", instr);
+      }
+    }
+    return WASM_INSTR_UNREACHABLE;
+  }
   while(offset < codelen){
     wasm_instr instr = read1();
     logd("INSTRUCTION: %x\n", instr);
@@ -731,30 +812,82 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
     case WASM_INSTR_BLOCK:
       {
 	u8 blktype = read1();
-	if(blktype != 0x40){
-	  u8 blkret = read1();
-	  ERROR("unsupported return from block %i", blkret);
-	}
+	
 	block += 1;
+	if(blktype != 0x40){
+	  u8 blkret = blktype;
+	  label_return[block] = blkret;
+	}
 
       }
       break;
     case WASM_INSTR_LOOP:
       {
 	u8 blktype = read1();
-	if(blktype != 0x40){
-	  u8 blkret = read1();
-	  ERROR("unsupported return from block %i", blkret);
-	}
+	
 	block += 1;
 	push_label();
+	if(blktype != 0x40){
+	  u8 blkret = blktype;
+	  label_return[block] = blkret;
+	}
 	
+      }
+      break;
+    case WASM_INSTR_IF:
+      {
+	block += 1;
+	u8 blktype = read1();
+	if(blktype != 0x40){
+	  u8 blkret = blktype;
+	  label_return[block] = blkret;
+	}
+	u64 cnd;
+	wasm_pop_u64(ctx, &cnd);
+	if(cnd){
+	  logd("ENTER IF %x\n", read1());
+	  offset -= 1;
+	}else{
+	  logd("ENTER ELSE\n");	
+	  wasm_instr end = move_to_end_of_block();
+	  switch(end){
+	  case WASM_INSTR_ELSE:
+	    logd("Found ELSE!!\n");
+	    break;
+	  case WASM_INSTR_END:
+	    // this happens
+	    logd("Found END!!\n");
+
+	    block -= 1;
+	    
+	    break;
+	  default:
+	    ERROR("Should not happen\n");
+	  }
+	}
+	break;
+
+      }
+    case WASM_INSTR_ELSE: 
+      {
+	// this can only happens during an 'if'.
+	logd("SKIP ELSE\n");
+	wasm_instr end = move_to_end_of_block();
+	switch(end){
+	case WASM_INSTR_END:
+	  block -= 1;
+	  break;
+	default:
+	  ERROR("UNSUPPORTED END INstruction: %x\n", end);
+	}
       }
       break;
     case WASM_INSTR_END:
       {
-	if(block == 0)
+	if(block == 0){
+	  stack_frames -= 1;
 	  return;
+	}
 	block -= 1;
 	logd("END LOOP\n");
       }
@@ -763,22 +896,41 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
       {
       wasm_instr_br:;
 	u32 brindex = readu32();
-
-	if(brindex == 0)
+	ASSERT(brindex == 0);
+	
+	if(labels[block]){
+	  // loop block not sure what brindex does.
 	  pop_label();
-	else
-	  ERROR("BR INDEX: %i\n", brindex);
-
+	}else{
+	  logd("BRANCH -> MOVE TO END\n");
+	  wasm_instr end = move_to_end_of_block();
+	  ASSERT(end == WASM_INSTR_END);
+	  labels[block] = 0;
+	  block -= 1;
+	}
       }
       break;
     case WASM_INSTR_BR_IF:
       {
+
 	u64 x;
 	wasm_pop_u64(ctx, &x);
+	logd("BR IF %x\n");
 	if(x)
 	  goto wasm_instr_br;
 	readu32();
 	//else continue..
+      }
+      break;
+    case WASM_INSTR_RETURN:
+      {
+	while(block > 0){
+	  if(label_return[block] != 0){
+	    wasm_stack_drop(ctx);
+	    label_return[block] = 0;
+	  }
+	  block--;
+	}
       }
       break;
         case WASM_INSTR_CALL:
@@ -806,10 +958,10 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 	  switch(f->builtin){
 	  case WASM_BUILTIN_REQUIRE_I32:
 	    {
-	      i32 a, b;
-	      wasm_pop_i32(ctx, &a);
-	      wasm_pop_i32(ctx, &b);
-	      log("REQUIRE I32 %i == %i\n", a, b);
+	      u64 a, b;
+	      wasm_pop_u64(ctx, &a);
+	      wasm_pop_u64(ctx, &b);
+	      log("REQUIRE I32 %i == %i\n", b, a);
 	      if(a != b){
 		ERROR("Require: does not match\n");
 	      }
@@ -836,9 +988,16 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 	    break;
 	  }
 	}else{
-
-	  //printf("Calling %i %s\n", fcn , f->name);
+	  
+	  logd("-------------%i CALL %s \n", stack_frames,f->name);
 	  wasm_exec_code(ctx, f->code, f->length, true, f->argcount);
+	  u64 v;
+	  if(ctx->stack_ptr > 0){
+	    wasm_pop_u64(ctx, &v);
+	    wasm_push_u64(ctx, v);
+	    logd("-------------- %i RETURNED %s %i \n", stack_frames, f->name, v);
+	  }
+
 	  //printf("return..\n");
 	}
 
@@ -928,128 +1087,151 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
     case WASM_INSTR_I32_EQZ:
       {
 	i32 a;
-	wasm_pop_i32(ctx,&a);
+	wasm_pop_i32(ctx, &a);
 	wasm_push_i32(ctx, a == 0);
       }
       break;
     case WASM_INSTR_I32_NE:
       {
 	i32 a, b;
-	wasm_pop_i32(ctx, &a);
 	wasm_pop_i32(ctx, &b);
-	//ERROR("WTF %i %i\n", a, b);
-	logd("%i == %i\n", a, b);
+	wasm_pop_i32(ctx, &a);
+
 	wasm_push_i32(ctx, a != b);
       }
       break;
     case WASM_INSTR_I32_LT_S:
       {
 	i32 a, b;
-	wasm_pop_i32(ctx, &a);
 	wasm_pop_i32(ctx, &b);
+	wasm_pop_i32(ctx, &a);
+
 	wasm_push_i32(ctx, a < b);
+      }
+      break;
+    case WASM_INSTR_I32_LT_U:
+      {
+	u32 a, b;
+	wasm_pop_u32(ctx, &b);
+	wasm_pop_u32(ctx, &a);
+
+	wasm_push_u32(ctx, a < b);
       }
       break;
     case WASM_INSTR_I32_GT_S:
       {
 	i32 a, b;
-	wasm_pop_i32(ctx, &a);
 	wasm_pop_i32(ctx, &b);
+	wasm_pop_i32(ctx, &a);
+	logd("GT S: %i > %i\n", a, b);
 	wasm_push_i32(ctx, a > b);
+      }
+      break;
+    case WASM_INSTR_I32_GT_U:
+      {
+	u32 a, b;
+	wasm_pop_u32(ctx, &b);
+	wasm_pop_u32(ctx, &a);
+	logd("GT: %i > %i\n", a, b);
+	wasm_push_u32(ctx, a > b);
       }
       break;
     case WASM_INSTR_I32_GE_S:
       {
 	i32 a, b;
-	wasm_pop_i32(ctx, &a);
 	wasm_pop_i32(ctx, &b);
+	wasm_pop_i32(ctx, &a);
 	wasm_push_i32(ctx, a >= b);
+      }
+      break;
+    case WASM_INSTR_I32_GE_U:
+      {
+	u32 a, b;
+	wasm_pop_u32(ctx, &b);
+	wasm_pop_u32(ctx, &a);
+	wasm_push_u32(ctx, a >= b);
       }
       break;
       case WASM_INSTR_I32_ADD:
       {
 	i32 a, b;
-	wasm_pop_i32(ctx,&a);
 	wasm_pop_i32(ctx, &b);
-	a = a + b;
-	wasm_push_i32(ctx, a);
+	wasm_pop_i32(ctx, &a);
+	i32 r =a + b;
+	logd("ADD: %i %i -> %i\n", a, b, r);
+	wasm_push_i32(ctx, r);
       }
       break;
     case WASM_INSTR_I32_SUB:
       {
 	i32 a, b;
-	wasm_pop_i32(ctx,&a);
 	wasm_pop_i32(ctx, &b);
-	a = b - a;
-	wasm_push_i32(ctx, a);
+	wasm_pop_i32(ctx,&a);
+	wasm_push_i32(ctx, a - b);
       }
       break;
     case WASM_INSTR_I32_MUL:
       {
 	i32 a, b;
-	wasm_pop_i32(ctx,&a);
 	wasm_pop_i32(ctx, &b);
-	a = a * b;
-	wasm_push_i32(ctx, a);
+	wasm_pop_i32(ctx, &a);
+	wasm_push_i32(ctx, a * b);
       }
       break;
     case WASM_INSTR_I32_DIV_S:
       {
 	i32 a, b;
-	wasm_pop_i32(ctx,&a);
 	wasm_pop_i32(ctx, &b);
-	a = b / a;
-	wasm_push_i32(ctx, a);
+	wasm_pop_i32(ctx, &a);
+	wasm_push_i32(ctx, a / b);
       }
       break;
     case WASM_INSTR_I32_DIV_U:
       {
 	u32 a, b;
-	wasm_pop_u32(ctx,&a);
 	wasm_pop_u32(ctx, &b);
-	a = b / a;
-	wasm_push_u32(ctx, a);
+	wasm_pop_u32(ctx, &a);
+	wasm_push_u32(ctx, a / b);
       }
       break;
     case WASM_INSTR_I32_REM_S:
       {
 	i32 a, b;
-	wasm_pop_i32(ctx,&a);
 	wasm_pop_i32(ctx, &b);
-	a = b % a;
-	wasm_push_i32(ctx, a);
+	wasm_pop_i32(ctx, &a);
+	wasm_push_i32(ctx, a % b);
       }
       break;
     case WASM_INSTR_I32_REM_U:
       {
 	u32 a, b;
-	wasm_pop_u32(ctx,&a);
 	wasm_pop_u32(ctx, &b);
-	a = b % a;
-	wasm_push_u32(ctx, a);
+	wasm_pop_u32(ctx, &a);
+	wasm_push_u32(ctx, a % b);
       }
       break;
     case WASM_INSTR_I32_AND:
       {
 	i32 a, b;
-	wasm_pop_i32(ctx,&a);
 	wasm_pop_i32(ctx, &b);
+	wasm_pop_i32(ctx,&a);
 	wasm_push_i32(ctx, a & b);
       }
       break;
     case WASM_INSTR_I32_OR:
       {
 	i32 a, b;
+	wasm_pop_i32(ctx, &b); 
 	wasm_pop_i32(ctx,&a);
-	wasm_pop_i32(ctx, &b);
 	wasm_push_i32(ctx, a | b);
       }
       break;
     case WASM_INSTR_I32_XOR:
       {
 	i32 a, b;
-	wasm_pop_i32(ctx,&a);
 	wasm_pop_i32(ctx, &b);
+	wasm_pop_i32(ctx,&a);
+
 	wasm_push_i32(ctx, a ^ b);
       }
       break;
@@ -1083,6 +1265,32 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
       
     }
   }
+  stack_frames -= 1;
+}
+
+int fib(int n){
+  if(n == 1)
+    return 1;
+  if(n == 0)
+    return 1;
+  return fib(n - 1) + fib(n - 2);
+}
+
+int fib2(int s, bool fst){
+  int a = 1;
+  if(s < 2) return a;
+  while(true){
+    int x = s - 1;
+    x = fib2(x, false);
+    x = x + a;
+    a = x;
+    s -= 2;
+    if(fst) printf("%i %i\n", a, s);
+    if(s <= 1)
+      break;
+  }
+  return a;
+
 }
 
 int main(int argc, char ** argv){
@@ -1124,7 +1332,8 @@ int main(int argc, char ** argv){
       }
     }
   }
-  
+  printf("FIB(7) = %i = %i\n", fib(7 + 5), fib2(6, true));
+  //return 0;
   if(funcindex != -1){
     logd("Executing...\n");
     wasm_push_i32(&ctx, 0);
@@ -1132,7 +1341,6 @@ int main(int argc, char ** argv){
     u8 some_code[] = {WASM_INSTR_CALL, (u8) funcindex};
     wasm_exec_code(&ctx, some_code, sizeof(some_code), false, 0);
   }
-  
   
   
   return 0;
