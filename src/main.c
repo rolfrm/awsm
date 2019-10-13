@@ -53,7 +53,21 @@ typedef enum WASM_INSTR{
   WASM_INSTR_I32_GE_S = 0x4E,
   WASM_INSTR_I32_ADD = 0x6a,
   WASM_INSTR_I32_SUB = 0x6B,
-  WASM_INSTR_I32_AND = 0x71
+  WASM_INSTR_I32_MUL = 0x6C,
+  WASM_INSTR_I32_DIV_S = 0x6D,
+  WASM_INSTR_I32_DIV_U = 0x6E,
+  WASM_INSTR_I32_REM_S = 0x6F,
+  WASM_INSTR_I32_REM_U = 0x70,
+  WASM_INSTR_I32_AND = 0x71,
+  WASM_INSTR_I32_OR = 0x72,
+  WASM_INSTR_I32_XOR = 0x73,
+  WASM_INSTR_I32_SHL = 0x74,
+  WASM_INSTR_I32_SHR_S = 0x75,
+  WASM_INSTR_I32_SHR_U = 0x76,
+  WASM_INSTR_I32_ROTL = 0x77,
+  WASM_INSTR_I32_ROTR = 0x78
+  
+  
   
 }wasm_instr;
 
@@ -71,7 +85,12 @@ typedef enum WASM_IMPORT_TYPE{
   WASM_IMPORT_MEM = 2,
   WASM_IMPORT_GLOBAL = 3
 }wasm_import_type;
-
+typedef enum WASM_BUILTIN_FCN{
+  WASM_BUILTIN_UNRESOLVED = 0,
+  WASM_BUILTIN_REQUIRE_I32,
+  WASM_BUILTIN_PRINT_I32,
+  WASM_BUILTIN_PRINT_STR
+}wasm_builtin_fcn;
 typedef struct{
   void * code;
   size_t length;
@@ -82,6 +101,7 @@ typedef struct{
   // unpack the code for better performance. This is skipped for now.
   //bool resolved; 
   bool import;
+  wasm_builtin_fcn builtin;
 }wasm_function;
 
 // cheapass function type struct;
@@ -594,6 +614,10 @@ void wasm_push_i32(wasm_execution_context * ctx, i32 v){
   wasm_push_data(ctx, &v, sizeof(v));
 }
 
+void wasm_push_u32(wasm_execution_context * ctx, u32 v){
+  wasm_push_data(ctx, &v, sizeof(v));
+}
+
 void wasm_pop_data(wasm_execution_context * ctx, void * out){
   ASSERT(ctx->stack_ptr > 0);
   ctx->stack_ptr -= 1;
@@ -605,6 +629,11 @@ void wasm_stack_drop(wasm_execution_context * ctx){
 }
 
 void wasm_pop_i32(wasm_execution_context * ctx, i32 * out){
+  i64 val;
+  wasm_pop_data(ctx, &val);
+  *out = (u32)val;
+}
+void wasm_pop_u32(wasm_execution_context * ctx, u32 * out){
   i64 val;
   wasm_pop_data(ctx, &val);
   *out = (u32)val;
@@ -687,7 +716,7 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
   for(u32 i = 0; i < localcount; i++)
     locals[i] = 0;
   for(u32 i = 0; i < argcount; i++){
-    wasm_pop_u64(ctx, locals + i);
+    wasm_pop_u64(ctx, locals + argcount - 1 - i);
   }
 
   logd("LOCAL COUNT: %i\n", localcount);
@@ -760,28 +789,51 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 	}
 	wasm_function * f = mod->func + fcn;
 	if(f->import){
-	  switch(fcn){
-	  case 0:{
-	    i32 ptr = 0;
-	    wasm_pop_i32(ctx, &ptr);
-	    printf("Result: %i\n", ptr);
-	    break;
-	  case 1:
-	  case 2:
-	    {
-	      // megaprinter.
-	      i32 ptr = 0;
-	      wasm_pop_i32(ctx, &ptr);
-	      char * str = (mod->heap->heap + ptr);
-	      ptr = printf("%s", str);
-	      wasm_push_i32(ctx, ptr);
-	      break;
+	  if(f->builtin == WASM_BUILTIN_UNRESOLVED){
+	    bool nameis(const char * x){
+	      return strcmp(x, f->name) == 0;
 	    }
-
+	    if(nameis("print_i32")){
+	      f->builtin = WASM_BUILTIN_PRINT_I32;
+	    }else if(nameis("print_str")){
+	      f->builtin = WASM_BUILTIN_PRINT_STR;
+	    }else if(nameis("require_i32")){
+	      f->builtin = WASM_BUILTIN_REQUIRE_I32;
+	    }else{
+	      ERROR("Unknown import: %s\n", f->name);
+	    }
 	  }
-	      
-	default:
-	  ERROR("Unknown imported function!\n");
+	  switch(f->builtin){
+	  case WASM_BUILTIN_REQUIRE_I32:
+	    {
+	      i32 a, b;
+	      wasm_pop_i32(ctx, &a);
+	      wasm_pop_i32(ctx, &b);
+	      log("REQUIRE I32 %i == %i\n", a, b);
+	      if(a != b){
+		ERROR("Require: does not match\n");
+	      }
+	    }
+	    break;
+	  case WASM_BUILTIN_PRINT_I32:
+	    {
+	      i32 v;
+	      wasm_pop_i32(ctx, &v);
+	      log("I32: %i\n", v);
+	    }
+	    break;
+	  case WASM_BUILTIN_PRINT_STR:
+	    {
+	      i32 v;
+	      wasm_pop_i32(ctx, &v);
+	      char * str = (mod->heap->heap + v);
+	      v = printf("%s", str);
+	      wasm_push_i32(ctx, v);
+	    }
+	    break;
+	  default:
+	    ERROR("Invalid builtin %i\n", f->builtin);
+	    break;
 	  }
 	}else{
 
@@ -821,17 +873,21 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
       {
 
 	u32 local = readu32();
-	logd("LOCAL GET %i\n", local);
 	ASSERT(local < localcount);
-	wasm_push_u64r(ctx, locals + local);
+	u64 l = locals[local];
+	wasm_push_u64(ctx, l);
+	logd("Local get %i: %i\n", local, l);
 	break;
       }
     case WASM_INSTR_LOCAL_TEE:
       {
 	u32 local = readu32();
 	ASSERT(local < localcount);
-	wasm_pop_u64(ctx, locals + local);
-	wasm_push_u64r(ctx, locals + local);
+	u64 value;
+	wasm_pop_u64(ctx, &value);
+	wasm_push_u64(ctx, value);	
+	locals[local] = value;
+	logd("Set local %i to %i\n", local, value);
       }
       break;
     case WASM_INSTR_GLOBAL_SET:
@@ -919,6 +975,60 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 	wasm_push_i32(ctx, a);
       }
       break;
+    case WASM_INSTR_I32_SUB:
+      {
+	i32 a, b;
+	wasm_pop_i32(ctx,&a);
+	wasm_pop_i32(ctx, &b);
+	a = b - a;
+	wasm_push_i32(ctx, a);
+      }
+      break;
+    case WASM_INSTR_I32_MUL:
+      {
+	i32 a, b;
+	wasm_pop_i32(ctx,&a);
+	wasm_pop_i32(ctx, &b);
+	a = a * b;
+	wasm_push_i32(ctx, a);
+      }
+      break;
+    case WASM_INSTR_I32_DIV_S:
+      {
+	i32 a, b;
+	wasm_pop_i32(ctx,&a);
+	wasm_pop_i32(ctx, &b);
+	a = b / a;
+	wasm_push_i32(ctx, a);
+      }
+      break;
+    case WASM_INSTR_I32_DIV_U:
+      {
+	u32 a, b;
+	wasm_pop_u32(ctx,&a);
+	wasm_pop_u32(ctx, &b);
+	a = b / a;
+	wasm_push_u32(ctx, a);
+      }
+      break;
+    case WASM_INSTR_I32_REM_S:
+      {
+	i32 a, b;
+	wasm_pop_i32(ctx,&a);
+	wasm_pop_i32(ctx, &b);
+	a = b % a;
+	wasm_push_i32(ctx, a);
+      }
+      break;
+    case WASM_INSTR_I32_REM_U:
+      {
+	u32 a, b;
+	wasm_pop_u32(ctx,&a);
+	wasm_pop_u32(ctx, &b);
+	a = b % a;
+	wasm_push_u32(ctx, a);
+      }
+      break;
     case WASM_INSTR_I32_AND:
       {
 	i32 a, b;
@@ -927,7 +1037,47 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 	wasm_push_i32(ctx, a & b);
       }
       break;
-    
+    case WASM_INSTR_I32_OR:
+      {
+	i32 a, b;
+	wasm_pop_i32(ctx,&a);
+	wasm_pop_i32(ctx, &b);
+	wasm_push_i32(ctx, a | b);
+      }
+      break;
+    case WASM_INSTR_I32_XOR:
+      {
+	i32 a, b;
+	wasm_pop_i32(ctx,&a);
+	wasm_pop_i32(ctx, &b);
+	wasm_push_i32(ctx, a ^ b);
+      }
+      break;
+    case WASM_INSTR_I32_SHL:
+      {
+	i32 a, b;
+	wasm_pop_i32(ctx, &b);
+	wasm_pop_i32(ctx, &a);
+	wasm_push_i32(ctx, a << b);
+      }
+      break;
+    case WASM_INSTR_I32_SHR_S:
+      {
+	i32 a, b;
+	wasm_pop_i32(ctx, &b);
+	wasm_pop_i32(ctx,&a);
+	wasm_push_i32(ctx, a >> b);
+      }
+      break;
+    case WASM_INSTR_I32_SHR_U:
+      {
+	u32 a, b;
+	wasm_pop_u32(ctx, &b);
+	wasm_pop_u32(ctx,&a);
+
+	wasm_push_u32(ctx, a >> b);
+      }
+      break;    
     default:
       ERROR("Cannot execute opcode %x", instr);
       
