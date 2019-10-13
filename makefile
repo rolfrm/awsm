@@ -7,7 +7,7 @@ TARGET = awsm
 LIB_OBJECTS =$(LIB_SOURCES:.c=.o)
 LEVEL_CS = $(addprefix src/, $(LEVEL_SOURCES:.data=.c))
 LDFLAGS= -L. $(OPT) -Wextra 
-LIBS= -liron
+LIBS= -liron -lm
 ALL= $(TARGET)
 CFLAGS = -Isrc/ -Iinclude/ -std=gnu11 -c $(OPT) -Wall -Wextra -Werror=implicit-function-declaration -Wformat=0 -D_GNU_SOURCE -fdiagnostics-color -Wextra  -Wwrite-strings -Werror -msse4.2 -Werror=maybe-uninitialized -DUSE_VALGRIND -DDEBUG
 
