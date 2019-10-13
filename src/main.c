@@ -178,6 +178,8 @@ typedef enum WASM_BUILTIN_FCN{
   WASM_BUILTIN_UNRESOLVED = 0,
   WASM_BUILTIN_REQUIRE_I32,
   WASM_BUILTIN_REQUIRE_I64,
+  WASM_BUILTIN_REQUIRE_F32,
+  WASM_BUILTIN_REQUIRE_F64,
   WASM_BUILTIN_PRINT_I32,
   WASM_BUILTIN_PRINT_STR
 }wasm_builtin_fcn;
@@ -237,6 +239,13 @@ void wasm_module_add_func(wasm_module * module){
   module->func[module->func_count - 1] = (wasm_function){0};
 }
 
+float fneg(float f){
+  return -f;
+}
+
+f64 dneg(f64 f){
+  return -f;
+}
 
 #define BINARY_OP(type, op){\
   type a = {0}, b = {0};    \
@@ -734,14 +743,15 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 
   f32 readf32(){
     f32 v = 0;
-    memcpy(&v, _code, sizeof(v));
+    memcpy(&v, _code + offset, sizeof(v));
     offset += sizeof(v);
+    printf("READ f32: %f\n", v);
     return v;
   }
 
   f64 readf64(){
     f64 v = 0;
-    memcpy(&v, _code, sizeof(v));
+    memcpy(&v, _code + offset, sizeof(v));
     offset += sizeof(v);
     return v;
   }
@@ -991,6 +1001,7 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 	}
 	wasm_function * f = mod->func + fcn;
 	if(f->import){
+	  logd("CALL BUILTIN %i\n", fcn);
 	  if(f->builtin == WASM_BUILTIN_UNRESOLVED){
 	    bool nameis(const char * x){
 	      return strcmp(x, f->name) == 0;
@@ -1003,6 +1014,10 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 	      f->builtin = WASM_BUILTIN_REQUIRE_I32;
 	    }else if(nameis("require_i64")){
 	      f->builtin = WASM_BUILTIN_REQUIRE_I64;
+	    }else if(nameis("require_f32")){
+	      f->builtin = WASM_BUILTIN_REQUIRE_F32;
+	    }else if(nameis("require_f64")){
+	      f->builtin = WASM_BUILTIN_REQUIRE_F64;
 	    }else{
 	      ERROR("Unknown import: %s\n", f->name);
 	    }
@@ -1024,7 +1039,29 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 	      i64 a, b;
 	      wasm_pop_i64(ctx, &a);
 	      wasm_pop_i64(ctx, &b);
-	      log("REQUIRE I64 %i == %i\n", b, a);
+	      log("  REQUIRE I64 %i == %i\n", b, a);
+	      if(a != b){
+		ERROR("Require: does not match\n");
+	      }
+	    }
+	    break;
+	  case WASM_BUILTIN_REQUIRE_F32:
+	    {
+	      f32 a, b;
+	      wasm_pop_f32(ctx, &a);
+	      wasm_pop_f32(ctx, &b);
+	      log("REQUIRE f32 %f == %f\n", b, a, fabs(a - b) < 0.0001f);
+	      if(fabs(a - b) > 0.000001){
+		ERROR("Require: does not match\n");
+	      }
+	    }
+	    break;
+	  case WASM_BUILTIN_REQUIRE_F64:
+	    {
+	      f64 a, b;
+	      wasm_pop_f64(ctx, &a);
+	      wasm_pop_f64(ctx, &b);
+	      log("REQUIRE f64 %f == %f\n", b, a);
 	      if(a != b){
 		ERROR("Require: does not match\n");
 	      }
@@ -1052,7 +1089,7 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 	  }
 	}else{
 	  
-	  logd("-------------%i CALL %s \n", stack_frames,f->name);
+	  logd("-------------%i CALL %s (%i)\n", stack_frames,f->name, fcn);
 	  wasm_exec_code(ctx, f->code, f->length, true, f->argcount);
 	  u64 v;
 	  if(ctx->stack_ptr > 0){
@@ -1295,8 +1332,9 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
       BINARY_OP(u32, >>);
     case WASM_INSTR_I32_WRAP_I64:
       {
-	i32 a = {0};
-	wasm_pop_i32(ctx, &a);
+	i64 a = {0};
+	wasm_pop_i64(ctx, &a);
+	printf("I32 WRAP i64 %p\n", a);
 	wasm_push_i64(ctx, a);
       }
       break;
@@ -1340,7 +1378,7 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
   case WASM_INSTR_F32_ABS: //0x8B,
     UNARY_OPF(f32, fabs);
   case WASM_INSTR_F32_NEG: //0x8C,
-    UNSUPPORTED_OP(F32_NEG);
+    UNARY_OPF(f32, fneg);
   case WASM_INSTR_F32_CEIL: //0x8D,
     UNARY_OPF(f32, ceil);
   case WASM_INSTR_F32_FLOOR: //0x8E,
@@ -1369,7 +1407,7 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
   case WASM_INSTR_F64_ABS: //0x8B,
     UNARY_OPF(f64, abs);
   case WASM_INSTR_F64_NEG: //0x8C,
-    UNSUPPORTED_OP(F64_NEG);
+    UNARY_OPF(f64, dneg);
   case WASM_INSTR_F64_CEIL: //0x8D,
     UNARY_OPF(f64, ceil);
   case WASM_INSTR_F64_FLOOR: //0x8E,
@@ -1378,7 +1416,7 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
     UNARY_OPF(f64, trunc);
   case WASM_INSTR_F64_NEAREST: //0x90,
     UNARY_OPF(f64, round);
-  case WASM_INSTR_F64_SQRT: //0x91,
+  case WASM_INSTR_F64_SQRT: //0x91
     UNARY_OPF(f64, sqrt);   
   case WASM_INSTR_F64_ADD: //0x92,
     BINARY_OP(f64, +);
@@ -1403,31 +1441,6 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
     }
   }
   stack_frames -= 1;
-}
-
-int fib(int n){
-  if(n == 1)
-    return 1;
-  if(n == 0)
-    return 1;
-  return fib(n - 1) + fib(n - 2);
-}
-
-int fib2(int s, bool fst){
-  int a = 1;
-  if(s < 2) return a;
-  while(true){
-    int x = s - 1;
-    x = fib2(x, false);
-    x = x + a;
-    a = x;
-    s -= 2;
-    if(fst) printf("%i %i\n", a, s);
-    if(s <= 1)
-      break;
-  }
-  return a;
-
 }
 
 int main(int argc, char ** argv){
@@ -1456,7 +1469,6 @@ int main(int argc, char ** argv){
   wasm_heap heap = {0};
   wasm_module * mod = load_wasm_module(&heap, data, buffer_size);
   ctx.module = mod;
-  logd("heap size: %i\n", heap.capacity);
   int funcindex = -1;
   if(entrypoint == NULL)
     return 0;
@@ -1469,8 +1481,7 @@ int main(int argc, char ** argv){
       }
     }
   }
-  printf("FIB(7) = %i = %i\n", fib(7 + 5), fib2(6, true));
-  //return 0;
+
   if(funcindex != -1){
     logd("Executing...\n");
     wasm_push_i32(&ctx, 0);
@@ -1478,7 +1489,6 @@ int main(int argc, char ** argv){
     u8 some_code[] = {WASM_INSTR_CALL, (u8) funcindex};
     wasm_exec_code(&ctx, some_code, sizeof(some_code), false, 0);
   }
-  
   
   return 0;
 
