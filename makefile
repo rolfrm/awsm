@@ -1,4 +1,4 @@
-OPT = -g3 -O0
+OPT = -g0 -O3
 LIB_SOURCES1 = main.c
 LIB_SOURCES = $(addprefix src/, $(LIB_SOURCES1))
 

@@ -2,6 +2,7 @@
 #include <string.h>
 extern int print_str(const char * x);
 void print_i32(int val);
+void print_i64(long long val, long long val2);
 void require_i32(int expected, int actual);
 void require_i64(long long expected, long long actual);
 void require_f32(float expected, float actual);
@@ -105,22 +106,23 @@ void test_math_f64(double five, double seven){
 
 
 int main(){
-  //add_things2(6, 5);
+
   print_str("\"Hello World!\"\n");
+
+  add_things2(6, 5); 
+  print_str("\"Lets run some tests!!\"\n\n");
   test_math(5, 7);
-  print_str("TEST MATH I64\n\n\n");
+  print_str("\nTEST MATH I64\n\n");
 
-  //test_math_i64(5, 7);
+  test_math_i64(5L, 7L);
 
-  print_str("TEST MATH F32\n\n\n");
+
+  print_str("\nTEST MATH F32\n\n");
   test_math_f32(5.0f, 7.0f);
-
-  print_str("TEST MATH F64\n\n\n");
+  
+  print_str("\nTEST MATH F64\n\n");
   test_math_f64(5.0, 7.0);
 
-  
-  //add_things(3, 4);
-  //megaprinter3(add_things(6, 5));
   return 0;
 }
 

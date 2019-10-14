@@ -181,6 +181,7 @@ typedef enum WASM_BUILTIN_FCN{
   WASM_BUILTIN_REQUIRE_F32,
   WASM_BUILTIN_REQUIRE_F64,
   WASM_BUILTIN_PRINT_I32,
+  WASM_BUILTIN_PRINT_I64,
   WASM_BUILTIN_PRINT_STR
 }wasm_builtin_fcn;
 typedef struct{
@@ -247,6 +248,8 @@ f64 dneg(f64 f){
   return -f;
 }
 
+#define OP_EQZ(x)x == 0
+
 #define BINARY_OP(type, op){\
   type a = {0}, b = {0};    \
   wasm_pop_##type(ctx, &b);\
@@ -288,19 +291,22 @@ wasm_module * load_wasm_module(wasm_heap * heap, void * _data, size_t size){
     return b;
   }
 
-  u32 readu32(){
+  u64 readu64(){
     // read LEB128
     u8 chunk = 0;
-    u32 value = 0;
+    u64 value = 0;
     u32 offset = 0;
     while((chunk = read1()) > 0){
       value |= (0b01111111 & chunk) << offset;
       offset += 7;
       if((0b10000000 & chunk) == false)
 	break;
-      
     }
     return value;
+  }
+  
+  u32 readu32(){
+    return readu64();
   }
 
   i32 readi32(){
@@ -678,6 +684,20 @@ void wasm_pop_i64(wasm_execution_context * ctx, i64 * out){
   *out = val;
 }
 
+void wasm_pop2_i64(wasm_execution_context * ctx, i64 * out){
+  union{
+    i64 val;
+    struct{
+      i32 x;
+      i32 y;
+    };
+  }w;
+  wasm_pop_i32(ctx, &w.x);
+  wasm_pop_i32(ctx, &w.y);
+
+  *out = w.val;
+}
+
 void wasm_pop_f32(wasm_execution_context * ctx, f32 *out){
   union{
     f32 o;
@@ -726,26 +746,30 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
     offset = labels[block];
   }
   UNUSED(pop_label);
-  u32 readu32(){
+
+  u64 readu64(){
     // read LEB128
     u8 chunk = 0;
-    u32 value = 0;
+    u64 value = 0;
     u32 offset = 0;
     while((chunk = read1()) > 0){
       value |= (0b01111111 & chunk) << offset;
       offset += 7;
       if((0b10000000 & chunk) == false)
 	break;
-      
     }
     return value;
+  }
+  
+  u32 readu32(){
+    return readu64();
   }
 
   f32 readf32(){
     f32 v = 0;
     memcpy(&v, _code + offset, sizeof(v));
     offset += sizeof(v);
-    printf("READ f32: %f\n", v);
+    logd("READ f32: %f\n", v);
     return v;
   }
 
@@ -808,16 +832,16 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
       if(instr >= WASM_INSTR_LOCAL_GET && instr <= WASM_INSTR_GLOBAL_SET)
 	{
 	// all these has one integer.
-	  readu32(); // should be u64.
+	  readu64();
 	  continue;
 	}
       if(instr >= WASM_INSTR_I32_LOAD && instr <= WASM_INSTR_I64_STORE32){
-	  readu32(); // should be u64.
-	  readu32(); // should be u64.
-	  continue;
+	readi64();
+	readi64();
+	continue;
       }
       if(instr >= WASM_INSTR_MEMORY_SIZE && instr <= WASM_INSTR_I64_CONST){
-	readu32();
+	readi32();
 	continue;
       }
       if(instr >= WASM_INSTR_I32_EQZ && instr <= WASM_INSTR_F64_REINTERPRET_I64){
@@ -1008,6 +1032,8 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 	    }
 	    if(nameis("print_i32")){
 	      f->builtin = WASM_BUILTIN_PRINT_I32;
+	    }else if(nameis("print_i64")){
+	      f->builtin = WASM_BUILTIN_PRINT_I64;
 	    }else if(nameis("print_str")){
 	      f->builtin = WASM_BUILTIN_PRINT_STR;
 	    }else if(nameis("require_i32")){
@@ -1022,6 +1048,11 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 	      ERROR("Unknown import: %s\n", f->name);
 	    }
 	  }
+
+	  // weird stuff:
+	  // apparantly when calling external methods, emcc thinks its a 32 bit stack
+	  // so 64bit values are in chunks of 32 bit.
+	  
 	  switch(f->builtin){
 	  case WASM_BUILTIN_REQUIRE_I32:
 	    {
@@ -1037,9 +1068,9 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 	  case WASM_BUILTIN_REQUIRE_I64:
 	    {
 	      i64 a, b;
-	      wasm_pop_i64(ctx, &a);
-	      wasm_pop_i64(ctx, &b);
-	      log("  REQUIRE I64 %i == %i\n", b, a);
+	      wasm_pop2_i64(ctx, &a);
+	      wasm_pop2_i64(ctx, &b);
+	      log("REQUIRE I64 %i == %i\n", b, a);
 	      if(a != b){
 		ERROR("Require: does not match\n");
 	      }
@@ -1074,6 +1105,13 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 	      log("I32: %i\n", v);
 	    }
 	    break;
+	  case WASM_BUILTIN_PRINT_I64:
+	    {
+	      i64 v;
+	      wasm_pop_i64(ctx, &v);
+	      log("I64: %p\n", v);
+	    }
+	    break;
 	  case WASM_BUILTIN_PRINT_STR:
 	    {
 	      i32 v;
@@ -1088,7 +1126,13 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 	    break;
 	  }
 	}else{
-	  
+	  if(fcn == 6){
+	    i64 x= 0;
+	    wasm_pop_i64(ctx, &x);
+	    logd("top of stack: %p\n", x);
+	    wasm_push_i64(ctx, x);
+
+	  }
 	  logd("-------------%i CALL %s (%i)\n", stack_frames,f->name, fcn);
 	  wasm_exec_code(ctx, f->code, f->length, true, f->argcount);
 	  u64 v;
@@ -1214,14 +1258,12 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
       case WASM_INSTR_I32_CONST:
       {
 	i32 x = readi32();
-	logd("I32 CONST: %i\n", x);
 	wasm_push_i32(ctx, x);
       }
       break;
     case WASM_INSTR_I64_CONST:
       {
 	i64 x = readi64();
-	logd("I64 CONST: %i\n", x);
 	wasm_push_i64(ctx, x);
       }
       break;
@@ -1238,12 +1280,7 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
       }
       break;
     case WASM_INSTR_I32_EQZ:
-      {
-	i32 a;
-	wasm_pop_i32(ctx, &a);
-	wasm_push_i32(ctx, a == 0);
-      }
-      break;
+      UNARY_OPF(i32, OP_EQZ);
     case WASM_INSTR_I32_EQ:
       BINARY_OP(i32, ==);
     case WASM_INSTR_I32_NE:
@@ -1334,7 +1371,6 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
       {
 	i64 a = {0};
 	wasm_pop_i64(ctx, &a);
-	printf("I32 WRAP i64 %p\n", a);
 	wasm_push_i64(ctx, a);
       }
       break;
