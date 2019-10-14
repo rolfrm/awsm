@@ -1,5 +1,8 @@
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <unistd.h>
+#include <stdio.h>
 extern int print_str(const char * x);
 void print_i32(int val);
 void print_i64(long long val, long long val2);
@@ -123,6 +126,29 @@ int main(){
   print_str("\nTEST MATH F64\n\n");
   test_math_f64(5.0, 7.0);
 
+  print_str("\nMore Stuff\n\n");
+  srand(1234321);
+  print_i32(rand());
+  print_i32(rand());
   return 0;
 }
 
+// this test function uses syscall 4 to print "Hello World!".
+void test2(){
+  char * str = "Hello World!\n";
+  write(0, str, strlen(str));
+}
+
+void hello_world(){
+  print_str("Kello World!\n");
+}
+
+typedef struct{
+  int fd;
+  char * str;
+  int count;
+}call4arg;
+
+int __syscall4(int which, call4arg * argptr){
+  return print_str(argptr->str);
+}
