@@ -1,6 +1,5 @@
 #include <iron/full.h>
 
-
 typedef enum WASM_SECTION{
   WASM_CUSTOM_SECTION = 0,
   WASM_TYPE_SECTION,
@@ -220,16 +219,10 @@ typedef struct{
   wasm_builtin_fcn builtin;
 }wasm_function;
 
-// cheapass function type struct;
 typedef struct{
   int argcount;
 
 }wasm_ftype;
-
-typedef struct
-{
-  u32 offset;
-}wasm_global;
 
 typedef struct{
   void * heap;
