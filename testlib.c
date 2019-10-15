@@ -161,7 +161,11 @@ int main(){
   require_f32(11.0f, x.x);
   require_f32(13.0f, x.y);
 
-  
+  if(malloc(10) == malloc(10)){
+    fail();
+  }
+  free(malloc(10000));
+
   return 0;
 }
 

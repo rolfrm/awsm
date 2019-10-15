@@ -203,7 +203,8 @@ typedef enum WASM_BUILTIN_FCN{
   WASM_BUILTIN_REQUIRE_F64,
   WASM_BUILTIN_PRINT_I32,
   WASM_BUILTIN_PRINT_I64,
-  WASM_BUILTIN_PRINT_STR
+  WASM_BUILTIN_PRINT_STR,
+  WASM_BUILTIN_SBRK
 }wasm_builtin_fcn;
 
 typedef struct{
@@ -1172,6 +1173,8 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 	      f->builtin = WASM_BUILTIN_REQUIRE_F32;
 	    }else if(nameis("require_f64")){
 	      f->builtin = WASM_BUILTIN_REQUIRE_F64;
+	    }else if(nameis("sbrk")){
+	      f->builtin = WASM_BUILTIN_SBRK;
 	    }
 	    else{
 	      ERROR("Unknown import: %s\n", f->name);
@@ -1250,9 +1253,15 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 	      wasm_push_i32(ctx, v);
 	    }
 	    break;
-	  default:
-	    ERROR("Invalid builtin %i\n", f->builtin);
-	    break;
+	  case WASM_BUILTIN_SBRK:
+	    { // malloc support
+	      i32 v;
+	      wasm_pop_i32(ctx, &v);
+	      logd("SBRK(%i)\n",v);
+	      mod->heap->heap = realloc(mod->heap->heap, mod->heap->capacity += v);
+	      wasm_push_u32(ctx,  mod->heap->capacity);
+	      break;
+	    }
 	  }
 	}else{
 	  
