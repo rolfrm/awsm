@@ -15,16 +15,15 @@ char * globthing = "hellohello";
 void fail(){
   require_i32(1,0);
 }
+
+typedef long long i64;
+
 int add_things(int x, int y){
   
   int it = 10;
   
   for(int i = 0; i < 5; i++)
     print_i32(i);
-  while(1){
-    print_i32(it);
-    it += 1;
-  }
   return x + y + myvalue - 3 + (int) it;
 }
 
@@ -45,6 +44,11 @@ int fib(int n){
 int add(int x, int y){
   return x + y;
 }
+
+i64 addi64(i64 x, i64 y){
+  return x + y;
+}
+
 
 void test_math(int five, int seven){
   require_i32(5, five);
@@ -76,6 +80,7 @@ void test_math_i64(long long five, long long seven){
   require_i64(7, seven);
   require_i64(-7, -seven);
   require_i64(5 + 7, five + seven);
+  require_i32(5 + 7, addi64(five, seven));
   require_i64(5 - 7, five - seven);
   require_i64(5 * 7, five * seven);
   require_i64(5 / 7, five / seven);
@@ -111,7 +116,20 @@ void test_math_f64(double five, double seven){
   require_f64(5 * 7, five * seven);
   require_f64(5.0 / 7.0, five / seven);
 }
+typedef struct{
+  float x,y;
+}vec2;
 
+vec2 vec2_new(float x, float y){
+  return (vec2){.x = x, .y = y};
+}
+ 
+
+vec2 vec2_add(vec2 a, vec2 *b){
+  a.x += b->x;
+  a.y += b->y;
+  return a;
+}
 
 int main(){
 
@@ -135,6 +153,15 @@ int main(){
   srand(1234321);
   print_i32(rand());
   print_i32(rand());
+  add_things(1,2);
+
+  vec2 z = vec2_new(4,5);
+  vec2 y = vec2_new(7,8);
+  vec2 x = vec2_add(z, &y);
+  require_f32(11.0f, x.x);
+  require_f32(13.0f, x.y);
+
+  
   return 0;
 }
 
