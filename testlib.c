@@ -42,11 +42,16 @@ int fib(int n){
   return fib(n - 1) + fib(n - 2);
 }
 
+int add(int x, int y){
+  return x + y;
+}
+
 void test_math(int five, int seven){
   require_i32(5, five);
   require_i32(-5, -five);
   require_i32(7, seven);
   require_i32(-7, -seven);
+  require_i32(5 + 7, add(five, seven));
   require_i32(5 + 7, five + seven);
   require_i32(5 - 7, five - seven);
   require_i32(5 * 7, five * seven);

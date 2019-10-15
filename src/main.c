@@ -213,6 +213,7 @@ typedef struct{
   const char * module;
   int type;
   u32 argcount;
+  u32 retcount;
   // unpack the code for better performance. This is skipped for now.
   //bool resolved; 
   bool import;
@@ -221,7 +222,7 @@ typedef struct{
 
 typedef struct{
   int argcount;
-
+  int retcount; // 0 or 1.
 }wasm_ftype;
 
 typedef struct{
@@ -425,6 +426,7 @@ wasm_module * load_wasm_module(wasm_heap * heap, u8 * _data, size_t size){
 	    read1(); // discard
 	  }
 	  module.types[typeidx].argcount = paramcount;
+	  module.types[typeidx].retcount = returncount;
 	  
 	}
 	break;
@@ -602,6 +604,7 @@ wasm_module * load_wasm_module(wasm_heap * heap, u8 * _data, size_t size){
 	    wasm_module_add_func(&module);
 	  module.func[funcindex].type = f;
 	  module.func[funcindex].argcount = module.types[f].argcount;
+	  module.func[funcindex].retcount = module.types[f].retcount;
 	}
 	if(guard + length != getloc())
 	  ERROR("Parse imbalance!\n");
@@ -827,12 +830,8 @@ void wasm_push_u64r(wasm_execution_context * ctx, u64 * in){
   wasm_push_data(ctx, in, sizeof(in[0]));
 }
 
-
-
 //awsm VM
-static int stack_frames = 0;
-void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bool funccall, u32 argcount){
-  stack_frames += 1;
+void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bool funccall, u32 argcount, u32 retcount){
   wasm_module * mod = ctx->module;
   u32 offset = 0;
   u8 read1(){
@@ -924,32 +923,26 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
     i64 * valptr = (ctx->module->heap->heap + addr + offset );
     memcpy(valptr, &value, bytes);
   }
-
-
-  u32 localcount = funccall ? readu32() : 0;
-  u32 localcount2 = 0;
-  for(u32 j = 0; j < localcount; j++){
-    u32 elemcount = readu32();
-    u8 type = read1();
-    localcount2 += elemcount;
-    //logd("%i of 0x%x\n", elemcount, type);
-    UNUSED(type);
-    UNUSED(elemcount);
-  }
-  localcount = localcount2;
-  localcount += argcount;
-  u64 locals[localcount];
-  for(u32 i = 0; i < localcount; i++)
-    locals[i] = 0;
-  for(u32 i = 0; i < argcount; i++){
-    wasm_pop_u64(ctx, locals + argcount - 1 - i);
+  u32 localcount = argcount;
+  size_t stack_pos = ctx->stack_ptr - argcount;
+  u64 * getlocal(u32 local){
+    ASSERT(local < localcount);
+    return ctx->stack + stack_pos + local;
   }
 
-  logd("LOCAL COUNT: %i\n", localcount);
+  {
+    u32 l = funccall ? readu32() : 0;
+    for(u32 j = 0; j < l; j++){
+      u32 elemcount = readu32();
+      u8 type = read1();
+      UNUSED(type);
+      for(u32 i = 0; i < elemcount; i++){
+	wasm_push_u64(ctx, 0);
+      }
+      localcount += elemcount;
+    }
+  }
   
-  UNUSED(readi32);
-
-  UNUSED(codelen);
   wasm_instr move_to_end_of_block(){
     u32 blk = block;
     while(offset < codelen){
@@ -1096,8 +1089,7 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
     case WASM_INSTR_END:
       {
 	if(block == 0){
-	  stack_frames -= 1;
-	  return;
+	  goto fcn_end;
 	}
 	block -= 1;
 	logd("END LOOP\n");
@@ -1150,6 +1142,7 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 	  }
 	  block--;
 	}
+	goto fcn_end;
       }
       break;
     case WASM_INSTR_CALL:
@@ -1262,20 +1255,20 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 	    break;
 	  }
 	}else{
-	  if(fcn == 6){
-	    i64 x= 0;
-	    wasm_pop_i64(ctx, &x);
-	    logd("top of stack: %p\n", x);
-	    wasm_push_i64(ctx, x);
-	    
+	  
+	  logd("CALL %s (%i)\n",f->name, fcn);
+	  u32 stackpos = ctx->stack_ptr;
+	  wasm_exec_code(ctx, f->code, f->length, true, f->argcount, f->retcount);
+	  if(stackpos - f->argcount + f->retcount != ctx->stack_ptr){
+	    ERROR("Stack imbalance! stk:%i  args:%i ret:%i newstk:%i\n", stackpos, f->argcount, f->retcount, ctx->stack_ptr);
 	  }
-	  logd("-------------%i CALL %s (%i)\n", stack_frames,f->name, fcn);
-	  wasm_exec_code(ctx, f->code, f->length, true, f->argcount);
+
+	  
 	  u64 v;
-	  if(ctx->stack_ptr > 0){
+	  if(ctx->stack_ptr > 0 && f->retcount == 1){
 	    wasm_pop_u64(ctx, &v);
 	    wasm_push_u64(ctx, v);
-	    logd("-------------- %i RETURNED %s %i \n", stack_frames, f->name, v);
+	    logd("RETURNED %s %i \n", f->name, v);
 	  }
 
 	  //printf("return..\n");
@@ -1295,7 +1288,7 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 	wasm_function * f = mod->func + fcn;
 	logd("CALL INDIRECT %s (%i)\n", f->name, fcn);
 	if(f->import) ERROR("Cannot indirectly call builtin\n");
-	wasm_exec_code(ctx, f->code, f->length, true, f->argcount);
+	wasm_exec_code(ctx, f->code, f->length, true, f->argcount, f->retcount);
       }
       break;
       
@@ -1321,17 +1314,15 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 	u32 local = readu32();
 	ASSERT(local < localcount);
 	logd("Local set: %i\n", local);
-	wasm_pop_u64(ctx, locals + local);
+	wasm_pop_u64(ctx, getlocal(local));
 	break;
       }
     case WASM_INSTR_LOCAL_GET:
       {
-
 	u32 local = readu32();
 	ASSERT(local < localcount);
-	u64 l = locals[local];
-	wasm_push_u64(ctx, l);
-	logd("Local get %i: %i\n", local, l);
+	wasm_push_u64r(ctx, getlocal(local));
+	logd("Local get %i: %p\n", local, getlocal(local)[0]);
 	break;
       }
     case WASM_INSTR_LOCAL_TEE:
@@ -1341,7 +1332,7 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 	u64 value;
 	wasm_pop_u64(ctx, &value);
 	wasm_push_u64(ctx, value);	
-	locals[local] = value;
+	getlocal(local)[0] = value;
 	logd("Set local %i to %i\n", local, value);
       }
       break;
@@ -1634,7 +1625,19 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
       break;
     }
   }
-  stack_frames -= 1;
+
+ fcn_end:;
+  
+  u64 return_value;
+  if(retcount == 1)
+    wasm_pop_u64(ctx, &return_value);
+  
+  for(u32 i = 0; i < localcount; i++){
+    wasm_stack_drop(ctx);
+  }
+  if(retcount == 1){
+    wasm_push_u64(ctx, return_value);
+  }
 }
 
 int main(int argc, char ** argv){
@@ -1681,7 +1684,7 @@ int main(int argc, char ** argv){
     wasm_push_i32(&ctx, 0);
     wasm_push_i32(&ctx, 0);
     u8 some_code[] = {WASM_INSTR_CALL, (u8) funcindex};
-    wasm_exec_code(&ctx, some_code, sizeof(some_code), false, 0);
+    wasm_exec_code(&ctx, some_code, sizeof(some_code), false, 0, 0);
   }
 
 
