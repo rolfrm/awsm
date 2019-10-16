@@ -6,7 +6,7 @@ CC = gcc
 TARGET = awsm
 LIB_OBJECTS =$(LIB_SOURCES:.c=.o)
 LDFLAGS= -L. $(OPT) -Wall -Wextra
-LIBS= -l:libm.a
+LIBS= -lm
 ALL= $(TARGET)
 CFLAGS = -Isrc/ -Iinclude/ -std=gnu11 -c $(OPT) -Wall  -Wextra -Werror=implicit-function-declaration -Wformat=0 -D_GNU_SOURCE -fdiagnostics-color -Wextra  -Wwrite-strings -Werror -Werror=maybe-uninitialized
 
