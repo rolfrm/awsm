@@ -273,10 +273,11 @@ typedef enum WASM_INSTR{
 
 typedef enum WASM_TYPE{
   WASM_TYPE_BLOCK_EMPTY = 0x40,
-  WASM_TYPE_I32 = 0x7F,
-  WASM_TYPE_I64 = 0x7E,
+  WASM_TYPE_F64 = 0x7C,
   WASM_TYPE_F32 = 0x7D,
-  WASM_TYPE_F64 = 0x7C
+  WASM_TYPE_I64 = 0x7E,
+  WASM_TYPE_I32 = 0x7F
+
 }wasm_type;
 
 typedef enum WASM_IMPORT_TYPE{
@@ -870,8 +871,6 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
 	  logd("DATA SECTION: %i %i %s\n", offset, bytecount, isGlobal ? "global" : "local");
 	  wasm_heap_min_capacity(module.heap, bytecount + offset + 1);
 	  reader_read(rd, module.heap->heap + offset, bytecount);
-	  
-	  //printf(" %s\n", module.heap->heap + offset);
 	}
 	if(guard + length != reader_getloc(rd))
 	  ERROR("Parse imbalance!\n");
@@ -892,11 +891,32 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
   return r;
 }
 
+typedef struct{
+
+  u32 block;
+  u32 label_offset;
+  u32 label_count;
+  u32 stack_pos;
+}wasm_control_stack_frame;
+
+typedef struct{
+  wasm_control_stack_frame * frames;
+  u32 frame_capacity;
+  u32 frame_ptr;
+
+  u32 * labels;
+  u32 label_capacity;
+  
+}wasm_control_stack;
+
 // everything on the wasm execution stack is a 64bit value.
 typedef struct{
   u64 * stack;
   size_t stack_capacity;
   size_t stack_ptr;
+
+  wasm_control_stack ctrl;
+  
   wasm_module * module;
 }wasm_execution_context;
 
@@ -1113,7 +1133,15 @@ void wasm_exec_code(wasm_execution_context * ctx, wasm_code_reader * rd, bool fu
     for(u32 j = 0; j < l; j++){
       u32 elemcount = reader_readu32(rd);
       u8 type = reader_read1(rd);
-      UNUSED(type);
+      switch(type){
+      case WASM_TYPE_F64:
+      case WASM_TYPE_F32:
+      case WASM_TYPE_I32:
+      case WASM_TYPE_I64:
+	break;
+      default:
+	ERROR("Unsupported type\n");
+      }
       for(u32 i = 0; i < elemcount; i++){
 	wasm_push_u64(ctx, 0);
       }
@@ -1438,9 +1466,7 @@ void wasm_exec_code(wasm_execution_context * ctx, wasm_code_reader * rd, bool fu
 	wasm_pop_u64(ctx, &s);
 	wasm_pop_u64(ctx, &y);
 	wasm_pop_u64(ctx, &x);
-	//printf("SELECT X: %p Y: %p S: %p\n", x, y, s);
 	u64 result = (s != 0) ? x : y;
-	//printf("SELECT RESULT %p\n", result);
 	wasm_push_u64(ctx, result);
       }
       break;
