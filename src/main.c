@@ -1,4 +1,94 @@
-#include <iron/full.h>
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <stdint.h>
+#include <string.h>
+#include <stdbool.h>
+#include <math.h>
+#include <stdarg.h>
+#include <signal.h>
+typedef int32_t i32;
+typedef int64_t i64;
+
+typedef uint8_t u8;
+typedef uint32_t u32;
+typedef uint64_t u64;
+
+typedef float f32;
+typedef double f64;
+#define UNUSED(x) (void)(x)
+
+void _error(const char * file, int line, const char * msg, ...){
+  UNUSED(file);UNUSED(line);UNUSED(msg);
+  char buffer[1000];  
+  va_list arglist;
+  va_start (arglist, msg);
+  vsprintf(buffer,msg,arglist);
+  va_end(arglist);
+  printf("%s\n", buffer);
+  printf("Got error at %s line %i\n", file,line);
+  raise(SIGINT);
+  exit(10);
+  raise(SIGINT);
+}
+
+#define log _log
+#define ERROR(msg,...) _error(__FILE__,__LINE__,msg, ##__VA_ARGS__)
+#define ASSERT(expr) if(__builtin_expect(!(expr), 0)){ERROR("Assertion '" #expr "' Failed");}
+
+bool logd_enable = true;
+void logd(const char * msg, ...){
+
+  if(logd_enable){
+    va_list arglist;
+    va_start (arglist, msg);
+    vprintf(msg,arglist);
+    va_end(arglist);
+  }
+}
+
+void _log(const char * msg, ...){
+  va_list arglist;
+  va_start (arglist, msg);
+  vprintf(msg,arglist);
+  va_end(arglist);
+}
+
+#define MAX(X,Y)(X > Y ? X : Y)
+#define MIN(X,Y)(X < Y ? X : Y)
+#define SIGN(x) (x > 0 ? 1 : (x < 0 ? -1 : 0))
+
+void * alloc0(size_t size){
+  void * ptr = malloc(size);
+  memset(ptr, 0, size);
+  return ptr;
+}
+
+void * alloc(size_t size){
+  return alloc0(size);
+}
+
+void * read_stream_to_buffer(FILE * f, size_t * size){
+  if(f == NULL)
+    return NULL;
+  fseek(f,0,SEEK_END);
+  *size = ftell(f);
+  char * buffer = alloc0(*size + 1);
+  fseek(f, 0, SEEK_SET);
+  size_t l = fread(buffer,*size,1,f);
+  ASSERT(l == 1);
+  return buffer;
+}
+
+void * read_file_to_buffer(const char * filepath, size_t * size){
+  FILE * f = fopen(filepath, "r");
+  if(f == NULL) return NULL;
+  char * data = read_stream_to_buffer(f, size);
+  fclose(f);
+  return data;
+}
+
+#define WASM_PAGE_SIZE 64000
 
 typedef enum WASM_SECTION{
   WASM_CUSTOM_SECTION = 0,
@@ -271,23 +361,20 @@ void wasm_module_add_func(wasm_module * module){
 
 #define BINARY_OP(type, op){\
   type a = {0}, b = {0};    \
-  wasm_pop_##type(ctx, &b);\
-  wasm_pop_##type(ctx, &a);			\
+  wasm_pop_##type##_2(ctx, &b, &a);		\
   wasm_push_##type(ctx, a op b);\
   }break;
 
 #define BINARY_OP_U64(type, op){\
   type a = {0}, b = {0};    \
-  wasm_pop_##type(ctx, &b);\
-  wasm_pop_##type(ctx, &a);			\
+  wasm_pop_##type##_2(ctx, &b, &a);\
   wasm_push_i32(ctx, (i32)(a op b));		\
   }break;
 
 
 #define BINARY_OPF(type, op){\
   type a = {0}, b = {0};    \
-  wasm_pop_##type(ctx, &b);\
-  wasm_pop_##type(ctx, &a);			\
+  wasm_pop_##type##_2(ctx, &a, &b);\
   wasm_push_##type(ctx, op(a, b));		\
   }break;
 
@@ -444,11 +531,7 @@ wasm_module * load_wasm_module(wasm_heap * heap, u8 * _data, size_t size){
     case WASM_CUSTOM_SECTION:
       {
 	u32 length = readu32();
-	logd("Custom section %i\n", length);
-	if(length > 0){
-	  logd("Skip custom section");
-	  advance(length);
-	}
+	advance(length);
 	continue;
       }
     case WASM_IMPORT_SECTION:
@@ -507,7 +590,7 @@ wasm_module * load_wasm_module(wasm_heap * heap, u8 * _data, size_t size){
 	      }
 	      
 	      logd("IMPORT MEMORY: %i %i %i\n", hasMax, min, max);
-	      wasm_heap_min_capacity(module.heap, min * 64000);
+	      wasm_heap_min_capacity(module.heap, min * WASM_PAGE_SIZE);
 	      break;
 	    }
 	  case WASM_IMPORT_GLOBAL:
@@ -607,7 +690,7 @@ wasm_module * load_wasm_module(wasm_heap * heap, u8 * _data, size_t size){
 	logd("count: %i\n", funccount);
        
 	for(u32 i = 0; i < funccount; i++){
-	  var funcindex = module.import_func_count + i;
+	  u32 funcindex = module.import_func_count + i;
 	  u32 f = readu32();
 	  logd("Func %i: %i %i\n",i, f, funcindex);
 	  if(module.func_count <= funcindex)
@@ -725,7 +808,9 @@ wasm_module * load_wasm_module(wasm_heap * heap, u8 * _data, size_t size){
        }  
     }
   }
-  return iron_clone(&module, sizeof(module));
+  wasm_module * r = alloc0(sizeof(module));
+  *r = module;
+  return r;
 }
 
 // everything on the wasm execution stack is a 64bit value.
@@ -776,6 +861,13 @@ void wasm_pop_data(wasm_execution_context * ctx, void * out){
   ctx->stack_ptr -= 1;
   memmove(out, ctx->stack + ctx->stack_ptr, 8);
 }
+
+void wasm_pop_data_2(wasm_execution_context * ctx, void * out){
+  ASSERT(ctx->stack_ptr > 1);
+  ctx->stack_ptr -= 2;
+  memmove(out, ctx->stack + ctx->stack_ptr, 8 * 2);
+}
+
 void wasm_stack_drop(wasm_execution_context * ctx){
   ASSERT(ctx->stack_ptr > 0);
   ctx->stack_ptr -= 1;
@@ -786,10 +878,25 @@ void wasm_pop_i32(wasm_execution_context * ctx, i32 * out){
   wasm_pop_data(ctx, &val);
   *out = (i32)val;
 }
+
+void wasm_pop_i32_2(wasm_execution_context * ctx, i32 * out, i32 * out2){
+  i64 val[2];
+  wasm_pop_data_2(ctx, val);
+  *out = (i32)(val[1]);
+  *out2 = (i32)(val[0]);
+}
+
 void wasm_pop_u32(wasm_execution_context * ctx, u32 * out){
   i64 val;
   wasm_pop_data(ctx, &val);
   *out = (u32)val;
+}
+
+void wasm_pop_u32_2(wasm_execution_context * ctx, u32 * out, u32 * out2){
+  i64 val[2];
+  wasm_pop_data_2(ctx, val);
+  *out = (u32)val[1];
+  *out2 = (u32)val[0];
 }
 
 void wasm_pop_i64(wasm_execution_context * ctx, i64 * out){
@@ -797,6 +904,25 @@ void wasm_pop_i64(wasm_execution_context * ctx, i64 * out){
   wasm_pop_data(ctx, &val);
   *out = val;
 }
+
+void wasm_pop_i64_2(wasm_execution_context * ctx, i64 * out, i64 * out2){
+  i64 val[2];
+  wasm_pop_data_2(ctx, val);
+  *out = val[1];
+  *out2 = val[0];
+}
+
+void wasm_pop_u64(wasm_execution_context * ctx, u64 * out){
+  wasm_pop_data(ctx, out);
+}
+
+void wasm_pop_u64_2(wasm_execution_context * ctx, u64 * out, u64 * out2){
+  u64 val[2];
+  wasm_pop_data_2(ctx, val);
+  *out = val[1];
+  *out2 = val[0];
+}
+
 
 void wasm_pop2_i64(wasm_execution_context * ctx, i64 * out){
   union{
@@ -821,6 +947,18 @@ void wasm_pop_f32(wasm_execution_context * ctx, f32 *out){
   *out = w.o;
 }
 
+
+void wasm_pop_f32_2(wasm_execution_context * ctx, f32 *out, f32 * out2){
+  union{
+    f32 o;
+    u64 d;
+  }w[2];
+  wasm_pop_data_2(ctx, &w[0].d);
+  *out = w[1].o;
+  *out2 = w[0].o;
+}
+
+
 void wasm_pop_f64(wasm_execution_context * ctx, f64 * out){
   union{
     f64 o;
@@ -830,10 +968,16 @@ void wasm_pop_f64(wasm_execution_context * ctx, f64 * out){
   *out = w.o;
 }
 
-void wasm_pop_u64(wasm_execution_context * ctx, u64 * out){
-  wasm_pop_data(ctx, out);
-  logd("WASM POP u64: %p\n", *out);
+void wasm_pop_f64_2(wasm_execution_context * ctx, f64 * out, f64 * out2){
+  union{
+    f64 o;
+    u64 d;
+  }w[2];
+  wasm_pop_data_2(ctx, &w[0].d);
+  *out = w[1].o;
+  *out2 = w[0].o;
 }
+
 
 void wasm_push_u64r(wasm_execution_context * ctx, u64 * in){
   logd("PUSH u64r: %p\n", *in);
@@ -918,7 +1062,9 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
     UNUSED(align);
     i32 addr;
     wasm_pop_i32(ctx, &addr);
-    i64 * valptr = (ctx->module->heap->heap + addr + offset );
+    u32 total_offset = addr + offset;
+    ASSERT(total_offset + bytes< ctx->module->heap->capacity);
+    i64 * valptr = (ctx->module->heap->heap + total_offset );
     wasm_push_data(ctx, valptr, bytes);
   }
 
@@ -930,7 +1076,9 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
     wasm_pop_u64(ctx, &value);
     i32 addr;
     wasm_pop_i32(ctx, &addr);
-    i64 * valptr = (ctx->module->heap->heap + addr + offset );
+    u32 total_offset = addr + offset;
+    ASSERT(total_offset + bytes < ctx->module->heap->capacity);
+    i64 * valptr = (ctx->module->heap->heap + total_offset );
     memcpy(valptr, &value, bytes);
   }
   u32 localcount = argcount;
@@ -1142,7 +1290,7 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 
 	u32 x;
 	wasm_pop_u32(ctx, &x);
-	printf("BR IF %x %i\n", x, block);
+	logd("BR IF %x %i\n", x, block);
 	if(x)
 	  goto wasm_instr_br;
 	readu32();
@@ -1287,7 +1435,10 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 	      wasm_push_u32(ctx,  mod->heap->capacity);
 	      break;
 	    }
+	  default:
+	    ERROR("UNKNOWN BUILTIN COMMAND\n");
 	  }
+	  
 	}else{
 	  
 	  logd("CALL %s (%i)\n",f->name, fcn);
@@ -1438,7 +1589,23 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
       store_op(ctx, 2);break;
     case WASM_INSTR_I64_STORE_32: // 0x3E,
       store_op(ctx, 4);break;
-    
+    case WASM_INSTR_MEMORY_SIZE: // = 0x3F,
+      {
+	size_t cap = mod->heap->capacity;
+	wasm_push_u64(ctx, cap / WASM_PAGE_SIZE);
+      }
+      break;
+    case WASM_INSTR_MEMORY_GROW:// = 0x40,
+      {
+	ERROR("Not supported!\n");
+	u32 newsize = 0;
+	wasm_pop_u32(ctx, &newsize);
+	newsize = newsize;
+	wasm_heap_min_capacity(mod->heap, newsize * WASM_PAGE_SIZE);
+	wasm_push_u32(ctx, newsize);
+	logd("New memory size: %p\n", newsize);
+      }
+      break;
     case WASM_INSTR_I64_CONST:
       wasm_push_i64(ctx, readi64()); break;
     case WASM_INSTR_F32_CONST:
@@ -1662,7 +1829,7 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 
  fcn_end:;
   
-  u64 return_value;
+  u64 return_value = 0;
   if(retcount == 1)
     wasm_pop_u64(ctx, &return_value);
   
@@ -1692,8 +1859,8 @@ int main(int argc, char ** argv){
   }
   if(file == NULL)
     goto print_help;
-  if(!diagnostic)
-    logd_enable = false;
+
+  logd_enable = diagnostic;
   
   size_t buffer_size = 0;
   void * data = read_file_to_buffer(file, &buffer_size);
@@ -1721,9 +1888,6 @@ int main(int argc, char ** argv){
     wasm_exec_code(&ctx, some_code, sizeof(some_code), false, 0, 0);
   }
 
-
-  
-  
   return 0;
 
  print_help:
