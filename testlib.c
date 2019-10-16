@@ -3,9 +3,11 @@
 #include <time.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <math.h>
 extern int print_str(const char * x);
 void print_i32(int val);
 void print_i64(long long val, long long val2);
+void print_f32(float v);
 void require_i32(int expected, int actual);
 void require_i64(long long expected, long long actual);
 void require_f32(float expected, float actual);
@@ -187,4 +189,78 @@ typedef struct{
 
 int __syscall4(int which, call4arg * argptr){
   return print_str(argptr->str);
+}
+
+typedef enum{
+  SPHERE = 1,
+  RECTANGLE = 2
+
+}primitive_type;
+
+typedef struct{
+  primitive_type type;
+  union{
+    struct{
+      float x,y,z,r;
+    }sphere;
+    
+    struct{
+      float x,y,z, w,h,d;
+    }rect;
+  };
+
+}thing;
+
+thing listofthings[] = {{.type = SPHERE, .sphere.x = 0.1, .sphere.y =0, .sphere.z =2, .sphere.r = 0.5}};
+
+
+float distance(float x, float y, float z){
+  int count = sizeof(listofthings) / sizeof(thing);
+  float d = 10000.0f;
+  for(int i = 0; i < count; i++){
+    thing * t = listofthings + i;
+    switch(t->type){
+    case SPHERE:
+      {
+	float x2 = x - t->sphere.x;
+	float y2 = y - t->sphere.y;
+	float z2 = z - t->sphere.z;
+	float v = sqrtf(x2 * x2 + y2 * y2 + z2 * z2) - t->sphere.r;
+	if(v < d)
+	  d = v;
+      }
+    default:
+      break;
+    }
+  }
+  return d;
+
+}
+
+void trace_distancefield(){
+  float dx=0,dy=0,dz=1;
+  float x= 0, y = 0, z = 0;
+
+  int iteration_count = 0;
+  while(1){
+    if(iteration_count > 100)
+      fail();
+    
+    float d = distance(x,y,z);
+    if(d <= 0){
+      print_str("BREAK\n");
+      break;
+    }
+    x += dx * d;
+    y += dy * d;
+    z += dz * d;
+    iteration_count += 1;
+  }
+}
+
+void test_everything(){
+  test2();
+  hello_world();
+  main();
+  trace_distancefield();
 }

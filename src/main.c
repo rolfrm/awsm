@@ -204,6 +204,7 @@ typedef enum WASM_BUILTIN_FCN{
   WASM_BUILTIN_PRINT_I32,
   WASM_BUILTIN_PRINT_I64,
   WASM_BUILTIN_PRINT_STR,
+  WASM_BUILTIN_PRINT_F32,
   WASM_BUILTIN_SBRK
 }wasm_builtin_fcn;
 
@@ -274,6 +275,14 @@ void wasm_module_add_func(wasm_module * module){
   wasm_pop_##type(ctx, &a);			\
   wasm_push_##type(ctx, a op b);\
   }break;
+
+#define BINARY_OP_U64(type, op){\
+  type a = {0}, b = {0};    \
+  wasm_pop_##type(ctx, &b);\
+  wasm_pop_##type(ctx, &a);			\
+  wasm_push_i32(ctx, (i32)(a op b));		\
+  }break;
+
 
 #define BINARY_OPF(type, op){\
   type a = {0}, b = {0};    \
@@ -961,9 +970,10 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 	continue;
       }
       if(instr >= WASM_INSTR_MEMORY_SIZE && instr <= WASM_INSTR_I64_CONST){
-	readi32();
+	readi64();
 	continue;
       }
+      
       if(instr >= WASM_INSTR_I32_EQZ && instr <= WASM_INSTR_F64_REINTERPRET_I64){
 	continue;
       }
@@ -1002,6 +1012,12 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
       case WASM_INSTR_CALL_INDIRECT:
 	readu32();
 	read1();
+	break;
+      case WASM_INSTR_F32_CONST:
+	offset += sizeof(f32);
+	break;
+      case WASM_INSTR_F64_CONST:
+	offset += sizeof(f64);
 	break;
       default:
 	ERROR("Unhandled instruction %x\n", instr);
@@ -1116,7 +1132,6 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 	  block -= 1;
 	}
 	if(brindex > 0){
-	  printf("Move next: %i\n", brindex);
 	  brindex -= 1;
 	  goto next_label;
 	}
@@ -1127,7 +1142,7 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 
 	u32 x;
 	wasm_pop_u32(ctx, &x);
-	logd("BR IF %x %i\n", x, block);
+	printf("BR IF %x %i\n", x, block);
 	if(x)
 	  goto wasm_instr_br;
 	readu32();
@@ -1163,6 +1178,8 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 	      f->builtin = WASM_BUILTIN_PRINT_I32;
 	    }else if(nameis("print_i64")){
 	      f->builtin = WASM_BUILTIN_PRINT_I64;
+	    }else if(nameis("print_f32")){
+	      f->builtin = WASM_BUILTIN_PRINT_F32;
 	    }else if(nameis("print_str")){
 	      f->builtin = WASM_BUILTIN_PRINT_STR;
 	    }else if(nameis("require_i32")){
@@ -1253,6 +1270,14 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 	      wasm_push_i32(ctx, v);
 	    }
 	    break;
+	  case WASM_BUILTIN_PRINT_F32:
+	    {
+	      f32 v;
+	      wasm_pop_f32(ctx, &v);
+	      printf("%f", v);
+	      break;
+	    }
+	    break;
 	  case WASM_BUILTIN_SBRK:
 	    { // malloc support
 	      i32 v;
@@ -1312,7 +1337,7 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
 	wasm_pop_u64(ctx, &y);
 	wasm_pop_u64(ctx, &x);
 	//printf("SELECT X: %p Y: %p S: %p\n", x, y, s);
-	u64 result = (s != 0) ? y : x;
+	u64 result = (s != 0) ? x : y;
 	//printf("SELECT RESULT %p\n", result);
 	wasm_push_u64(ctx, result);
       }
@@ -1465,30 +1490,30 @@ void wasm_exec_code(wasm_execution_context * ctx, u8 * _code, size_t codelen, bo
       BINARY_OP(u64, >=);
 
     case WASM_INSTR_F32_EQ:
-      BINARY_OP(f32, ==);
+      BINARY_OP_U64(f32, ==);
     case WASM_INSTR_F32_NE:
-      BINARY_OP(f32, !=);
+      BINARY_OP_U64(f32, !=);
     case WASM_INSTR_F32_LT:
-      BINARY_OP(f32, <);
+      BINARY_OP_U64(f32, <);
     case WASM_INSTR_F32_GT:
-      BINARY_OP(f32, >);
+      BINARY_OP_U64(f32, >);
     case WASM_INSTR_F32_LE:
-      BINARY_OP(f32, <=);
+      BINARY_OP_U64(f32, <=);
     case WASM_INSTR_F32_GE:
-      BINARY_OP(f32, <=);
+      BINARY_OP_U64(f32, <=);
 
     case WASM_INSTR_F64_EQ:
-      BINARY_OP(f64, ==);
+      BINARY_OP_U64(f64, ==);
     case WASM_INSTR_F64_NE:
-      BINARY_OP(f64, !=);
+      BINARY_OP_U64(f64, !=);
     case WASM_INSTR_F64_LT:
-      BINARY_OP(f64, <);
+      BINARY_OP_U64(f64, <);
     case WASM_INSTR_F64_GT:
-      BINARY_OP(f64, >);
+      BINARY_OP_U64(f64, >);
     case WASM_INSTR_F64_LE:
-      BINARY_OP(f64, <=);
+      BINARY_OP_U64(f64, <=);
     case WASM_INSTR_F64_GE:
-      BINARY_OP(f64, <=);
+      BINARY_OP_U64(f64, <=);
       
     case WASM_INSTR_I32_ADD:
       BINARY_OP(i32, +);
