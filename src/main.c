@@ -2535,19 +2535,6 @@ int main(int argc, char ** argv){
     wasm_code_reader rd = {.data = some_code, .size = sizeof(some_code), .offset = 0};
     wasm_exec_code(&ctx, &rd, false, 0, 0);
   }
-  }else if(false){
-    wasm_push_i32(&ctx, 12);
-    wasm_push_i32(&ctx, 5);
-    u8 some_code[] = {WASM_INSTR_I32_ADD};
-    ctx.frames = alloc0(sizeof(ctx.frames[0]));
-    wasm_control_stack_frame * f = ctx.frames;
-    f->rd.offset = 0;
-    f->rd.size = 1;
-    f->rd.data = some_code;
-    wasm_exec_code2(&ctx, 1);
-    i32 r;
-    wasm_pop_i32(&ctx, &r);
-    ASSERT(r == 172);
   }else{
     {
       u8 code[] = {WASM_INSTR_I32_CONST, 4};
