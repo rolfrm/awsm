@@ -896,6 +896,8 @@ typedef struct{
   u32 label_offset;
   u32 stack_pos;
   u32 localcount;
+  u32 retcount;
+  u32 argcount;
   wasm_code_reader rd;
 }wasm_control_stack_frame;
 
@@ -922,17 +924,20 @@ typedef struct{
 
 static void wasm_stack_drop(wasm_execution_context * ctx){
   ASSERT(ctx->stack_ptr > 0);
+  logd("STACK DROP %i\n", ctx->stack_ptr);
   ctx->stack_ptr -= 1;
 }
 
 static void wasm_push_data(wasm_execution_context * ctx, void * data, size_t size){
-  size_t new_size = ctx->stack_ptr + (size + 7) / 8;
+  ASSERT(size <= 8);
+  size_t new_size = ctx->stack_ptr + 1;
+  logd("PUSH %i\n", new_size);
   if(new_size > ctx->stack_capacity){
     ctx->stack = realloc(ctx->stack, sizeof(ctx->stack[0]) * (ctx->stack_capacity = (ctx->stack_capacity + 1) * 2));
     logd("increasing stack to %i\n", ctx->stack_capacity);
   }
   if(size < 8)
-    memset(ctx->stack + ctx->stack_ptr, 0, sizeof(ctx->stack[0]));
+    memset(ctx->stack + ctx->stack_ptr, 0, sizeof(u64));
   memmove(ctx->stack + ctx->stack_ptr, data, size);
   ctx->stack_ptr = new_size;
 }
@@ -962,12 +967,14 @@ static void wasm_push_f64(wasm_execution_context * ctx, f64 v){
 }
 
 static void wasm_pop_data(wasm_execution_context * ctx, void * out){
+  logd("POP %i\n", ctx->stack_ptr);
   ASSERT(ctx->stack_ptr > 0);
   ctx->stack_ptr -= 1;
   memmove(out, ctx->stack + ctx->stack_ptr, 8);
 }
 
 static void wasm_pop_data_2(wasm_execution_context * ctx, void * out){
+  logd("POP2 %i %p %p\n", ctx->stack_ptr, ctx->stack[ctx->stack_ptr- 1],ctx->stack[ctx->stack_ptr- 2] );
   ASSERT(ctx->stack_ptr > 1);
   ctx->stack_ptr -= 2;
   memmove(out, ctx->stack + ctx->stack_ptr, 8 * 2);
@@ -985,6 +992,7 @@ static void wasm_pop_i32_2(wasm_execution_context * ctx, i32 * out, i32 * out2){
   wasm_pop_data_2(ctx, val);
   *out = (i32)(val[1]);
   *out2 = (i32)(val[0]);
+  logd("POP 2xi32: %x %x\n", out[0], out2[0]);
 }
 
 static void wasm_pop_u32(wasm_execution_context * ctx, u32 * out){
@@ -994,7 +1002,7 @@ static void wasm_pop_u32(wasm_execution_context * ctx, u32 * out){
 }
 
 static void wasm_pop_u32_2(wasm_execution_context * ctx, u32 * out, u32 * out2){
-  i64 val[2];
+  u64 val[2];
   wasm_pop_data_2(ctx, val);
   *out = (u32)val[1];
   *out2 = (u32)val[0];
@@ -1079,7 +1087,6 @@ static void wasm_pop_f64_2(wasm_execution_context * ctx, f64 * out, f64 * out2){
 
 
 static void wasm_push_u64r(wasm_execution_context * ctx, u64 * in){
-  logd("PUSH u64r: %p\n", *in);
   wasm_push_data(ctx, in, sizeof(in[0]));
 }
 
@@ -1113,12 +1120,26 @@ static u64 * getlocal(wasm_execution_context * ctx, u32 local){
   return ctx->stack + f->stack_pos + local;
 }
 
-void pop_label(wasm_execution_context * ctx, bool move){
+bool pop_label(wasm_execution_context * ctx, bool move){
   wasm_control_stack_frame * f = ctx->frames + ctx->frame_ptr;
   if(f->block == 0){
     if(ctx->frame_ptr > 0){
+      u64 return_value = 0;
+      u32 localcount = f->localcount - f->argcount;
+	
+      if(localcount > 0){
+	if(f->retcount == 1)
+	  wasm_pop_u64(ctx, &return_value);
+
+
+	logd("POP FRAME PTR %i -> %i %i\n", f->retcount, return_value, localcount);
+	for(u32 i = 0; i < localcount; i++)
+	  wasm_stack_drop(ctx);
+	if(f->retcount)
+	  wasm_push_u64(ctx, return_value);
+      }
       ctx->frame_ptr -= 1;
-      return;
+      return true;
     }
     ERROR("END OF PROGRAM\n");
   }
@@ -1134,6 +1155,7 @@ void pop_label(wasm_execution_context * ctx, bool move){
   }else{
     f->block -= 1; // skipping forward
   }
+  return false;
 }
 
 void push_label(wasm_execution_context * ctx, u8 blktype, bool forward){
@@ -1153,12 +1175,37 @@ void return_from(wasm_execution_context * ctx){
   while(f->block > 0){
     wasm_label * label = ctx->labels + f->block - 1;
     if(label->type != 0x40){
+      logd("DROP Stack frame\n");
       wasm_stack_drop(ctx);
     }
     pop_label(ctx, false);
   }
+  f->rd.offset = f->rd.size;
 }
 
+bool push_stack_frame(wasm_execution_context * ctx){
+  bool changed;
+  if(ctx->frame_ptr + 1 >= ctx->frame_capacity){
+    ctx->frames = realloc(ctx->frames, sizeof(ctx->frames[0]) * (ctx->frame_capacity += 1));
+    changed = true;
+  }else{
+    changed = false;
+  }
+  memset(ctx->frames + ctx->frame_ptr, 0, sizeof(ctx->frames[0]));
+  ctx->frame_ptr += 1;
+
+  return changed;
+}
+
+int func_index(wasm_module * mod, const char * name){
+  for(u32 i = 0; i < mod->func_count; i++){
+    if(mod->func[i].name != NULL && strcmp(name, mod->func[i].name) == 0){
+      logd("Found fcn\n");
+      return i;
+    }
+  }
+  return -1;
+}
 
 #include "old_wasm_exec.c"
 void wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
@@ -1203,7 +1250,7 @@ void wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
 	  case WASM_INSTR_END:
 	    // this happens
 	    logd("Found END!!\n");
-	    pop_label(ctx, false);
+	    ASSERT(pop_label(ctx, false) == false);
 	    break;
 	  default:
 	    ERROR("Should not happen\n");
@@ -1220,7 +1267,7 @@ void wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
 
 	switch(end){
 	case WASM_INSTR_END:
-	  pop_label(ctx, false);
+	  ASSERT(pop_label(ctx, false) == false);
 	  break;
 	default:
 	  ERROR("UNSUPPORTED END INstruction: %x\n", end);
@@ -1228,7 +1275,10 @@ void wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
       }
       break;
     case WASM_INSTR_END:
-      pop_label(ctx, false);
+      if(pop_label(ctx, false)){
+	f = ctx->frames + ctx->frame_ptr;
+	rd = &f->rd;  
+      }
       logd("END LOOP\n");
       break;
     case WASM_INSTR_BR:
@@ -1237,7 +1287,7 @@ void wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
       wasm_instr_br:;
 	u32 brindex = reader_readu32(rd);
       next_label:
-	pop_label(ctx, true);
+	ASSERT(false == pop_label(ctx, true));
 	if(brindex > 0){
 	  brindex -= 1;
 	  goto next_label;
@@ -1259,6 +1309,8 @@ void wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
     case WASM_INSTR_RETURN:
       {
 	return_from(ctx);
+	f = ctx->frames + ctx->frame_ptr;
+	rd = &f->rd;
       }
       break;
     case WASM_INSTR_CALL:
@@ -1267,34 +1319,34 @@ void wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
 	if(fcn > mod->func_count){
 	  ERROR("Unknown function %i\n", fcn);
 	}
-	wasm_function * f = mod->func + fcn;
-	if(f->import){
+	wasm_function * fn = mod->func + fcn;
+	if(fn->import){
 	  logd("CALL BUILTIN %i\n", fcn);
-	  if(f->builtin == WASM_BUILTIN_UNRESOLVED){
+	  if(fn->builtin == WASM_BUILTIN_UNRESOLVED){
 	    bool nameis(const char * x){
-	      return strcmp(x, f->name) == 0;
+	      return strcmp(x, fn->name) == 0;
 	    }
 	    if(nameis("print_i32")){
-	      f->builtin = WASM_BUILTIN_PRINT_I32;
+	      fn->builtin = WASM_BUILTIN_PRINT_I32;
 	    }else if(nameis("print_i64")){
-	      f->builtin = WASM_BUILTIN_PRINT_I64;
+	      fn->builtin = WASM_BUILTIN_PRINT_I64;
 	    }else if(nameis("print_f32")){
-	      f->builtin = WASM_BUILTIN_PRINT_F32;
+	      fn->builtin = WASM_BUILTIN_PRINT_F32;
 	    }else if(nameis("print_str")){
-	      f->builtin = WASM_BUILTIN_PRINT_STR;
+	      fn->builtin = WASM_BUILTIN_PRINT_STR;
 	    }else if(nameis("require_i32")){
-	      f->builtin = WASM_BUILTIN_REQUIRE_I32;
+	      fn->builtin = WASM_BUILTIN_REQUIRE_I32;
 	    }else if(nameis("require_i64")){
-	      f->builtin = WASM_BUILTIN_REQUIRE_I64;
+	      fn->builtin = WASM_BUILTIN_REQUIRE_I64;
 	    }else if(nameis("require_f32")){
-	      f->builtin = WASM_BUILTIN_REQUIRE_F32;
+	      fn->builtin = WASM_BUILTIN_REQUIRE_F32;
 	    }else if(nameis("require_f64")){
-	      f->builtin = WASM_BUILTIN_REQUIRE_F64;
+	      fn->builtin = WASM_BUILTIN_REQUIRE_F64;
 	    }else if(nameis("sbrk")){
-	      f->builtin = WASM_BUILTIN_SBRK;
+	      fn->builtin = WASM_BUILTIN_SBRK;
 	    }
 	    else{
-	      ERROR("Unknown import: %s\n", f->name);
+	      ERROR("Unknown import: %s\n", fn->name);
 	    }
 	  }
 
@@ -1302,7 +1354,7 @@ void wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
 	  // apparantly when calling external methods, emcc thinks its a 32 bit stack
 	  // so 64bit values are in chunks of 32 bit.
 	  
-	  switch(f->builtin){
+	  switch(fn->builtin){
 	  case WASM_BUILTIN_REQUIRE_I32:
 	    {
 	      i32 a, b;
@@ -1392,30 +1444,43 @@ void wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
 	  }
 	  
 	}else{
-	  
-	  logd("CALL %s (%i)\n",f->name, fcn);
-	  u32 stackpos = ctx->stack_ptr;
-	  wasm_code_reader rd = {.data = f->code, .size = f->length, .offset = 0};
-	  wasm_exec_code(ctx, &rd, true, f->argcount, f->retcount);
-	  if(stackpos - f->argcount + f->retcount != ctx->stack_ptr){
-	    ERROR("Stack imbalance! stk:%i  args:%i ret:%i newstk:%i\n", stackpos, f->argcount, f->retcount, ctx->stack_ptr);
-	  }
 
-	  
-	  u64 v;
-	  if(ctx->stack_ptr > 0 && f->retcount == 1){
-	    wasm_pop_u64(ctx, &v);
-	    wasm_push_u64(ctx, v);
-	    logd("RETURNED %s %i \n", f->name, v);
-	  }
+	  logd("CALL %s (%i)\n",fn->name, fcn);
+	  push_stack_frame(ctx);
+	  f = ctx->frames + ctx->frame_ptr;
+	  rd = &f->rd;
+	  f->retcount = fn->retcount;
+	  f->stack_pos = ctx->stack_ptr - fn->argcount;
+	  f->argcount = fn->argcount;
+	  rd[0] = (wasm_code_reader){.data = fn->code, .size = fn->length, .offset = 0};
+	  u32 l = reader_readu32(rd);
+	  for(u32 i = 0; i < l; i++){
+	    u32 elemcount = reader_readu32(rd);
+	    u8 type = reader_read1(rd);
 
-	  //printf("return..\n");
+	    { // sanity check
+	      switch(type){
+	      case WASM_TYPE_F64:
+	      case WASM_TYPE_F32:
+	      case WASM_TYPE_I32:
+	      case WASM_TYPE_I64:
+		break;
+	      default:
+		ERROR("Unsupported type\n");
+	      }
+	    }
+	    for(u32 i = 0; i < elemcount; i++){
+	      wasm_push_u64(ctx, 0);
+	    }
+	    f->localcount += elemcount;
+	  }
+	  f->localcount += fn->argcount;
 	}
-
       }
       break;
     case WASM_INSTR_CALL_INDIRECT:
       {
+	ERROR("UNSUPPORTED\n");
 	/*u32 ind =*/ reader_readu32(rd);
 	u32 fcn;
 	wasm_pop_u32(ctx, &fcn);
@@ -1449,14 +1514,14 @@ void wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
     case WASM_INSTR_LOCAL_SET:
       {
 	u32 local = reader_readu32(rd);
-	logd("Local set: %i\n", local);
 	wasm_pop_u64(ctx, getlocal(ctx, local));
+	logd("Local set %i: %p\n", local, getlocal(ctx,local)[0]);
 	break;
       }
     case WASM_INSTR_LOCAL_GET:
       {
 	u32 local = reader_readu32(rd);
-	wasm_push_u64r(ctx, getlocal(ctx, local));
+	wasm_push_u64(ctx, getlocal(ctx, local)[0]);
 	logd("Local get %i: %p\n", local, getlocal(ctx,local)[0]);
 	break;
       }
@@ -1887,6 +1952,25 @@ int main(int argc, char ** argv){
       wasm_pop_i32(&ctx, &r);
       ASSERT(r == 24);
       ASSERT(ctx.frames[0].block == 0);
+    }
+    {
+      logd(" -- TEST RETURN -- \n");
+      u8 code[] = {WASM_INSTR_I32_CONST, 9, WASM_INSTR_I32_CONST, 15, WASM_INSTR_BLOCK, WASM_TYPE_I32, WASM_INSTR_RETURN, WASM_INSTR_END};
+      wasm_exec_code3(&ctx, code, sizeof(code), 20);
+      i32 r;
+      wasm_pop_i32(&ctx, &r);
+      ASSERT(r == 9);
+      ASSERT(ctx.frames[0].block == 0);
+    }
+    { // call
+      logd(" -- TEST FUNCTION -- \n");
+      u8 code[] = {WASM_INSTR_I32_CONST, 13, WASM_INSTR_I32_CONST, 15, WASM_INSTR_CALL, func_index(mod, "add")};
+      wasm_exec_code3(&ctx, code, sizeof(code), 20);
+      i32 r;
+      wasm_pop_i32(&ctx, &r);
+      ASSERT(r == 28);
+      ASSERT(ctx.frames[0].block == 0);
+
     }
   }
 
