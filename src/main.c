@@ -1452,11 +1452,13 @@ void wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
 	    break;
 	  case WASM_BUILTIN_SBRK:
 	    { // malloc support
+
 	      i32 v;
 	      wasm_pop_i32(ctx, &v);
 	      logd("SBRK(%i)\n",v);
-	      mod->heap->heap = realloc(mod->heap->heap, mod->heap->capacity += v);
 	      wasm_push_u32(ctx,  mod->heap->capacity);
+	      if(v > 0)
+		mod->heap->heap = realloc(mod->heap->heap, mod->heap->capacity += v);
 	      break;
 	    }
 	  default:
@@ -1625,8 +1627,10 @@ void wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
       store_op(rd, ctx, 4);break;
     case WASM_INSTR_MEMORY_SIZE: // = 0x3F,
       {
+
 	size_t cap = mod->heap->capacity;
 	wasm_push_u64(ctx, cap / WASM_PAGE_SIZE);
+	ERROR("SIZE: %i\n", cap);
       }
       break;
     case WASM_INSTR_MEMORY_GROW:// = 0x40,

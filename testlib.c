@@ -146,12 +146,14 @@ int main(){
   print_str("\nTEST MATH I64\n\n");
 
   test_math_i64(5L, 7L);
-
+  
   print_str("\nTEST MATH F32\n\n");
   test_math_f32(5.0f, 7.0f);
   
   print_str("\nTEST MATH F64\n\n");
   test_math_f64(5.0, 7.0);
+
+  
 
   print_str("\nMore Stuff\n\n");
   srand(1234321);
@@ -164,7 +166,10 @@ int main(){
   vec2 x = vec2_add(z, &y);
   require_f32(11.0f, x.x);
   require_f32(13.0f, x.y);
-
+  print_i32((int) malloc(10));
+  print_i32((int) malloc(10));
+  print_i32((int) malloc(10));
+  print_i32((int) malloc(10));
   if(malloc(10) == malloc(10)){
     fail();
   }
@@ -172,7 +177,7 @@ int main(){
 
   return 0;
 }
-
+/*
 // this test function uses syscall 4 to print "Hello World!".
 void test2(){
   char * str = "Hello World!\n";
@@ -266,3 +271,4 @@ void test_everything(){
   main();
   trace_distancefield();
 }
+*/
