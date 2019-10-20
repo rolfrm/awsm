@@ -931,7 +931,7 @@ static void wasm_stack_drop(wasm_execution_context * ctx){
 static void wasm_push_data(wasm_execution_context * ctx, void * data, size_t size){
   ASSERT(size <= 8);
   size_t new_size = ctx->stack_ptr + 1;
-  logd("PUSH %i\n", new_size);
+
   if(new_size > ctx->stack_capacity){
     ctx->stack = realloc(ctx->stack, sizeof(ctx->stack[0]) * (ctx->stack_capacity = (ctx->stack_capacity + 1) * 2));
     logd("increasing stack to %i\n", ctx->stack_capacity);
@@ -939,6 +939,7 @@ static void wasm_push_data(wasm_execution_context * ctx, void * data, size_t siz
   if(size < 8)
     memset(ctx->stack + ctx->stack_ptr, 0, sizeof(u64));
   memmove(ctx->stack + ctx->stack_ptr, data, size);
+  logd("PUSH %i: %p\n", size, ((u64 *) data)[0]);
   ctx->stack_ptr = new_size;
 }
 
@@ -967,10 +968,11 @@ static void wasm_push_f64(wasm_execution_context * ctx, f64 v){
 }
 
 static void wasm_pop_data(wasm_execution_context * ctx, void * out){
-  logd("POP %i\n", ctx->stack_ptr);
+
   ASSERT(ctx->stack_ptr > 0);
   ctx->stack_ptr -= 1;
   memmove(out, ctx->stack + ctx->stack_ptr, 8);
+  logd("POP %i %p\n", ctx->stack_ptr, ((u64 *) out)[0]);
 }
 
 static void wasm_pop_data_2(wasm_execution_context * ctx, void * out){
@@ -992,7 +994,6 @@ static void wasm_pop_i32_2(wasm_execution_context * ctx, i32 * out, i32 * out2){
   wasm_pop_data_2(ctx, val);
   *out = (i32)(val[1]);
   *out2 = (i32)(val[0]);
-  logd("POP 2xi32: %x %x\n", out[0], out2[0]);
 }
 
 static void wasm_pop_u32(wasm_execution_context * ctx, u32 * out){
@@ -1040,8 +1041,9 @@ static void wasm_pop2_i64(wasm_execution_context * ctx, i64 * out){
       i32 y;
     };
   }w;
-  wasm_pop_i32(ctx, &w.x);
   wasm_pop_i32(ctx, &w.y);
+  wasm_pop_i32(ctx, &w.x);
+
 
   *out = w.val;
 }
@@ -1125,12 +1127,11 @@ bool pop_label(wasm_execution_context * ctx, bool move){
   if(f->block == 0){
     if(ctx->frame_ptr > 0){
       u64 return_value = 0;
-      u32 localcount = f->localcount - f->argcount;
+      u32 localcount = f->localcount;
 	
       if(localcount > 0){
 	if(f->retcount == 1)
 	  wasm_pop_u64(ctx, &return_value);
-
 
 	logd("POP FRAME PTR %i -> %i %i\n", f->retcount, return_value, localcount);
 	for(u32 i = 0; i < localcount; i++)
@@ -1158,6 +1159,24 @@ bool pop_label(wasm_execution_context * ctx, bool move){
   return false;
 }
 
+void pop_label2(wasm_execution_context * ctx, int arity){
+  wasm_control_stack_frame * f = ctx->frames + ctx->frame_ptr;
+  wasm_label * label = ctx->labels + f->block - (1 + arity);
+  if(label->offset){
+    f->rd.offset = label->offset;
+    for(int i = 0; i < arity; i++){
+      f->block -= 1; // skipping forward
+    }
+  }else{
+    for(int i = 0; i < arity + 1; i++){
+      wasm_instr end = move_to_end_of_block(&f->rd, f->block);
+      f->block -= 1; // skipping forward
+      UNUSED(end);
+    }
+
+  }
+}
+
 void push_label(wasm_execution_context * ctx, u8 blktype, bool forward){
   wasm_control_stack_frame * f = ctx->frames + ctx->frame_ptr;
   f->block += 1;
@@ -1180,10 +1199,11 @@ void return_from(wasm_execution_context * ctx){
     }
     pop_label(ctx, false);
   }
-  f->rd.offset = f->rd.size;
+  pop_label(ctx, false);
 }
 
 bool push_stack_frame(wasm_execution_context * ctx){
+  logd("PUSH STACK FRAME ->%i\n", ctx->frame_ptr + 1);
   bool changed;
   if(ctx->frame_ptr + 1 >= ctx->frame_capacity){
     ctx->frames = realloc(ctx->frames, sizeof(ctx->frames[0]) * (ctx->frame_capacity += 1));
@@ -1191,8 +1211,8 @@ bool push_stack_frame(wasm_execution_context * ctx){
   }else{
     changed = false;
   }
-  memset(ctx->frames + ctx->frame_ptr, 0, sizeof(ctx->frames[0]));
   ctx->frame_ptr += 1;
+  memset(ctx->frames + ctx->frame_ptr, 0, sizeof(ctx->frames[0]));
 
   return changed;
 }
@@ -1209,13 +1229,14 @@ int func_index(wasm_module * mod, const char * name){
 
 #include "old_wasm_exec.c"
 void wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
+
   wasm_control_stack_frame * f = ctx->frames + ctx->frame_ptr;
   wasm_code_reader * rd = &f->rd;
   wasm_module * mod = ctx->module;
   while(rd->offset < rd->size && stepcount > 0){
     stepcount--;
     wasm_instr instr = reader_read1(rd);
-    logd("INSTRUCTION %x: %x\n", rd->offset, instr);
+    logd("INSTRUCTION %x: %x (/%x)\n", rd->offset, instr, stepcount);
     logd("STATE %i\n", f->block);
     switch(instr){
     case WASM_INSTR_BLOCK:
@@ -1275,23 +1296,23 @@ void wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
       }
       break;
     case WASM_INSTR_END:
+      logd("END %i %i\n", ctx->frame_ptr, stepcount);
       if(pop_label(ctx, false)){
+
 	f = ctx->frames + ctx->frame_ptr;
-	rd = &f->rd;  
+	rd = &f->rd;
+	//gd(">> %i %i:%i\n", ctx->frame_ptr, rd->offset, rd->size);
       }
-      logd("END LOOP\n");
+
       break;
     case WASM_INSTR_BR:
       {
-	logd("BR\n");
+
       wasm_instr_br:;
+
 	u32 brindex = reader_readu32(rd);
-      next_label:
-	ASSERT(false == pop_label(ctx, true));
-	if(brindex > 0){
-	  brindex -= 1;
-	  goto next_label;
-	}
+	logd("BR %i\n", brindex);
+	pop_label2(ctx, brindex);
       }
       break;
     case WASM_INSTR_BR_IF:
@@ -1522,9 +1543,9 @@ void wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
       {
 	u32 local = reader_readu32(rd);
 	wasm_push_u64(ctx, getlocal(ctx, local)[0]);
-	logd("Local get %i: %p\n", local, getlocal(ctx,local)[0]);
-	break;
+	logd("Local get %i: %p %i %i %i\n", local, getlocal(ctx,local)[0]);
       }
+      break;
     case WASM_INSTR_LOCAL_TEE:
       {
 	u32 local = reader_readu32(rd);
@@ -1850,6 +1871,7 @@ void wasm_exec_code3(wasm_execution_context * ctx, u8 * code, size_t l, u32 step
   f->rd.offset = 0;
   f->rd.size = l;
   f->rd.data = code;
+  ctx->frame_ptr = 0;
   wasm_exec_code2(ctx, steps);
 }
 
@@ -1953,7 +1975,7 @@ int main(int argc, char ** argv){
       ASSERT(r == 24);
       ASSERT(ctx.frames[0].block == 0);
     }
-    {
+    if(false){
       logd(" -- TEST RETURN -- \n");
       u8 code[] = {WASM_INSTR_I32_CONST, 9, WASM_INSTR_I32_CONST, 15, WASM_INSTR_BLOCK, WASM_TYPE_I32, WASM_INSTR_RETURN, WASM_INSTR_END};
       wasm_exec_code3(&ctx, code, sizeof(code), 20);
@@ -1961,14 +1983,30 @@ int main(int argc, char ** argv){
       wasm_pop_i32(&ctx, &r);
       ASSERT(r == 9);
       ASSERT(ctx.frames[0].block == 0);
+      ASSERT(ctx.frame_ptr == 0);
     }
     { // call
       logd(" -- TEST FUNCTION -- \n");
       u8 code[] = {WASM_INSTR_I32_CONST, 13, WASM_INSTR_I32_CONST, 15, WASM_INSTR_CALL, func_index(mod, "add")};
-      wasm_exec_code3(&ctx, code, sizeof(code), 20);
+      wasm_exec_code3(&ctx, code, sizeof(code), 2000);
       i32 r;
       wasm_pop_i32(&ctx, &r);
       ASSERT(r == 28);
+      ASSERT(ctx.frames[0].block == 0);
+      ASSERT(ctx.frame_ptr == 0);
+
+    }
+    { // call
+      logd(" -- TEST MAIN FUNCTION -- \n");
+      int main_index = func_index(mod, "main");
+      if(main_index == -1){
+	ERROR("MAIN NOT FOUND\n");
+      }
+      u8 code[] = {WASM_INSTR_I32_CONST, 13, WASM_INSTR_I32_CONST, 15, WASM_INSTR_CALL, main_index};
+      wasm_exec_code3(&ctx, code, sizeof(code), 2100000);
+      i32 r;
+      wasm_pop_i32(&ctx, &r);
+      ASSERT(r == 0); // main returns 0
       ASSERT(ctx.frames[0].block == 0);
 
     }

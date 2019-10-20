@@ -51,7 +51,6 @@ i64 addi64(i64 x, i64 y){
   return x + y;
 }
 
-
 void test_math(int five, int seven){
   require_i32(5, five);
   require_i32(-5, -five);
@@ -107,7 +106,6 @@ void test_math_f32(float five, float seven){
   require_f32(5.f / 7.f, five / seven);
 }
 
-
 void test_math_f64(double five, double seven){
   require_f64(5, five);
   require_f64(-5, -five);
@@ -137,13 +135,17 @@ int main(){
 
   print_str("\"Hello World!\"\n");
 
-  add_things2(6, 5); 
+  add_things2(6, 5);
+
+  add_things2(6, 5);
+
   print_str("\"Lets run some tests!!\"\n\n");
+
   test_math(5, 7);
+
   print_str("\nTEST MATH I64\n\n");
 
   test_math_i64(5L, 7L);
-
 
   print_str("\nTEST MATH F32\n\n");
   test_math_f32(5.0f, 7.0f);
