@@ -267,7 +267,23 @@ typedef enum WASM_INSTR{
   WASM_INSTR_I32_TRUNC_F64_U = 0xAB,
   WASM_INSTR_I64_EXTEND_I32_S = 0xAC,
   WASM_INSTR_I64_EXTEND_I32_U = 0xAD,
-  
+  WASM_INSTR_I64_TRUNC_F32_S = 0xAE,
+  WASM_INSTR_I64_TRUNC_F32_U = 0xAF,
+  WASM_INSTR_I64_TRUNC_F64_S = 0xB0,
+  WASM_INSTR_I64_TRUNC_F64_U = 0xB1,
+  WASM_INSTR_F32_CONVERT_I32_S = 0xB2,
+  WASM_INSTR_F32_CONVERT_I32_U = 0xB3,
+  WASM_INSTR_F32_CONVERT_I64_S = 0xB4,
+  WASM_INSTR_F32_CONVERT_I64_U = 0xB5,
+  WASM_INSTR_F32_DEMOTE_F64 = 0xB6,
+  WASM_INSTR_F64_CONVERT_I32_S = 0xB7,
+  WASM_INSTR_F64_CONVERT_I32_U = 0xB8,
+  WASM_INSTR_F64_CONVERT_I64_S = 0xB9,
+  WASM_INSTR_F64_CONVERT_I64_U = 0xBA,
+  WASM_INSTR_F64_PROMOTE_F32 = 0xBB,
+  WASM_INSTR_I32_REINTERPRET_F32 = 0xBC,
+  WASM_INSTR_I64_REINTERPRET_F64 = 0xBD,
+  WASM_INSTR_F32_REINTERPRET_I32 = 0xBE,
   WASM_INSTR_F64_REINTERPRET_I64 = 0xBF
 }wasm_instr;
 
@@ -391,8 +407,15 @@ static void wasm_module_add_func(wasm_module * module){
 #define TRUNCF_U32(X) (u32)(truncf(X))
 #define TRUNCD_I32(X) (i32)(trunc(X))
 #define TRUNCD_U32(X) (u32)(trunc(X))
+#define TRUNCF_I64(X) (i64)(truncf(X))
+#define TRUNCF_U64(X) (u64)(truncf(X))
+#define TRUNCD_I64(X) (i64)(trunc(X))
+#define TRUNCD_U64(X) (u64)(trunc(X))
 #define EXTEND_I64_I32(x) (u64)x
 #define EXTEND_I64_U32(x) (u64)x
+#define CONVERT_TO_F32(x) (f32)x
+#define CONVERT_TO_F64(x) (f64)x
+
 
 #define UNSUPPORTED_OP(name){ERROR("UNsupported operation\n");}break;
 
@@ -1894,6 +1917,46 @@ void wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
     UNARY_OPF(i32, EXTEND_I64_I32);
     case WASM_INSTR_I64_EXTEND_I32_U: // 0xAD,
     UNARY_OPF(u32, EXTEND_I64_U32);
+
+    case WASM_INSTR_I64_TRUNC_F32_S: //0xAE,
+      UNARY_OPF(f32, TRUNCF_I64);
+    case WASM_INSTR_I64_TRUNC_F32_U: //0xAF,
+      UNARY_OPF(f32, TRUNCF_U64);
+    case WASM_INSTR_I64_TRUNC_F64_S: //0xB0,
+      UNARY_OPF(f64, TRUNCD_I64);
+    case WASM_INSTR_I64_TRUNC_F64_U: //0xB1,
+      UNARY_OPF(f64, TRUNCD_U64);
+    case WASM_INSTR_F32_CONVERT_I32_S: //0xB2,
+      UNARY_OPF(f32, CONVERT_TO_F32);
+    case WASM_INSTR_F32_CONVERT_I32_U: //0xB3,
+      UNARY_OPF(f32, CONVERT_TO_F32);
+    case WASM_INSTR_F32_CONVERT_I64_S: //0xB4,
+      UNARY_OPF(f32, CONVERT_TO_F32);
+    case WASM_INSTR_F32_CONVERT_I64_U: //0xB5,
+      UNARY_OPF(f32, CONVERT_TO_F32);
+    case WASM_INSTR_F32_DEMOTE_F64: //0xB6,
+      UNARY_OPF(f32, CONVERT_TO_F32);
+    case WASM_INSTR_F64_CONVERT_I32_S: //0xB7,
+      UNARY_OPF(f32, CONVERT_TO_F64);
+    case WASM_INSTR_F64_CONVERT_I32_U: //0xB8,
+      UNARY_OPF(f32, CONVERT_TO_F64);
+    case WASM_INSTR_F64_CONVERT_I64_S: //0xB9,
+      UNARY_OPF(f32, CONVERT_TO_F64);
+    case WASM_INSTR_F64_CONVERT_I64_U: //0xBA,
+      UNARY_OPF(f32, CONVERT_TO_F64);
+    case WASM_INSTR_F64_PROMOTE_F32: //0xBB,
+      UNARY_OPF(f32, CONVERT_TO_F64);
+    case WASM_INSTR_I32_REINTERPRET_F32: //0xBC,
+      break; // bits are already on the stack
+    case WASM_INSTR_I64_REINTERPRET_F64: //0xBD,
+      break;
+    case WASM_INSTR_F32_REINTERPRET_I32: //0xBE,
+      break;
+    case WASM_INSTR_F64_REINTERPRET_I64: //0xBF
+      break;
+    
+
+    
     default:
       ERROR("Cannot execute opcode %x\n", instr);
       break;
