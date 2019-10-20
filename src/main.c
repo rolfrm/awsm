@@ -1,4 +1,3 @@
-
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -374,8 +373,6 @@ static void wasm_module_add_func(wasm_module * module){
   module->func[module->func_count - 1] = (wasm_function){0};
 }
 
-#define OP_NEG(x)-x
-#define OP_EQZ(x)x == 0
 
 #define BINARY_OP(type, op){\
   type a = {0}, b = {0};    \
@@ -389,13 +386,11 @@ static void wasm_module_add_func(wasm_module * module){
   wasm_push_i32(ctx, (i32)(a op b));		\
   }break;
 
-
 #define BINARY_OPF(type, op){\
   type a = {0}, b = {0};    \
   wasm_pop_##type##_2(ctx, &a, &b);\
   wasm_push_##type(ctx, op(a, b));		\
   }break;
-
 
 #define UNARY_OPF(type, f){\
   type a = {0};    \
@@ -403,6 +398,8 @@ static void wasm_module_add_func(wasm_module * module){
   wasm_push_##type(ctx, f(a));			\
   }break;
 
+#define OP_NEG(x)-x
+#define OP_EQZ(x)x == 0
 #define TRUNCF_I32(X) (i32)(truncf(X))
 #define TRUNCF_U32(X) (u32)(truncf(X))
 #define TRUNCD_I32(X) (i32)(trunc(X))
@@ -415,8 +412,6 @@ static void wasm_module_add_func(wasm_module * module){
 #define EXTEND_I64_U32(x) (u64)x
 #define CONVERT_TO_F32(x) (f32)x
 #define CONVERT_TO_F64(x) (f64)x
-
-
 #define UNSUPPORTED_OP(name){ERROR("UNsupported operation\n");}break;
 
 typedef struct{
@@ -804,7 +799,6 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
 	}
 	if(guard + length != reader_getloc(rd))
 	  ERROR("Parse imbalance!\n");
-	//advance(length);
 	break;
       }
     case WASM_START_SECTION:
@@ -1080,7 +1074,6 @@ static void wasm_pop_f32(wasm_execution_context * ctx, f32 *out){
   *out = w.o;
 }
 
-
 static void wasm_pop_f32_2(wasm_execution_context * ctx, f32 *out, f32 * out2){
   union{
     f32 o;
@@ -1109,7 +1102,6 @@ static void wasm_pop_f64_2(wasm_execution_context * ctx, f64 * out, f64 * out2){
   *out = w[1].o;
   *out2 = w[0].o;
 }
-
 
 static void wasm_push_u64r(wasm_execution_context * ctx, u64 * in){
   wasm_push_data(ctx, in, sizeof(in[0]));
@@ -1165,7 +1157,7 @@ bool pop_label(wasm_execution_context * ctx, bool move){
       ctx->frame_ptr -= 1;
       return true;
     }
-    ERROR("END OF PROGRAM\n");
+    ERROR("UNEXPECTED END OF PROGRAM\n");
   }
   if(move){
     wasm_label * label = ctx->labels + f->label_offset + f->block - 1;
@@ -1196,7 +1188,6 @@ void pop_label2(wasm_execution_context * ctx, int arity){
       f->block -= 1; // skipping forward
       UNUSED(end);
     }
-
   }
 }
 
@@ -1217,7 +1208,6 @@ void return_from(wasm_execution_context * ctx){
   while(f->block > 0){
     wasm_label * label = ctx->labels + f->block - 1;
     if(label->type != 0x40){
-      logd("DROP Stack frame\n");
       wasm_stack_drop(ctx);
     }
     pop_label(ctx, false);
@@ -1247,14 +1237,12 @@ bool push_stack_frame(wasm_execution_context * ctx){
 int func_index(wasm_module * mod, const char * name){
   for(u32 i = 0; i < mod->func_count; i++){
     if(mod->func[i].name != NULL && strcmp(name, mod->func[i].name) == 0){
-      logd("Found fcn\n");
       return i;
     }
   }
   return -1;
 }
 
-#include "old_wasm_exec.c"
 void wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
 
   wasm_control_stack_frame * f = ctx->frames + ctx->frame_ptr;
