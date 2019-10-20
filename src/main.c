@@ -1237,7 +1237,6 @@ void wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
     stepcount--;
     wasm_instr instr = reader_read1(rd);
     logd("INSTRUCTION %x: %x (/%x)\n", rd->offset, instr, stepcount);
-    logd("STATE %i\n", f->block);
     switch(instr){
     case WASM_INSTR_BLOCK:
       {
@@ -1613,7 +1612,7 @@ void wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
     case WASM_INSTR_F32_STORE: // 0x38,
       store_op(rd, ctx, 4);break;
     case WASM_INSTR_F64_STORE: // 0x39,
-      store_op(rd, ctx, 6);break;
+      store_op(rd, ctx, 8);break;
     case WASM_INSTR_I32_STORE_8: // 0x3A,
       store_op(rd, ctx, 1);break;
     case WASM_INSTR_I32_STORE_16: // 0x3B,
