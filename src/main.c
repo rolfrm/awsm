@@ -939,7 +939,7 @@ static void wasm_push_data(wasm_execution_context * ctx, void * data, size_t siz
   if(size < 8)
     memset(ctx->stack + ctx->stack_ptr, 0, sizeof(u64));
   memmove(ctx->stack + ctx->stack_ptr, data, size);
-  logd("PUSH %i: %p\n", size, ((u64 *) data)[0]);
+  logd("PUSH %i: %p\n", size, ((u64 *) ctx->stack + ctx->stack_ptr)[0]);
   ctx->stack_ptr = new_size;
 }
 
@@ -1133,7 +1133,7 @@ bool pop_label(wasm_execution_context * ctx, bool move){
 	if(f->retcount == 1)
 	  wasm_pop_u64(ctx, &return_value);
 
-	logd("POP FRAME PTR %i -> %i %i\n", f->retcount, return_value, localcount);
+	logd("POP FRAME PTR %i\n", ctx->frame_ptr);
 	for(u32 i = 0; i < localcount; i++)
 	  wasm_stack_drop(ctx);
 	if(f->retcount)
@@ -1145,7 +1145,7 @@ bool pop_label(wasm_execution_context * ctx, bool move){
     ERROR("END OF PROGRAM\n");
   }
   if(move){
-    wasm_label * label = ctx->labels + f->block - 1;
+    wasm_label * label = ctx->labels + f->label_offset + f->block - 1;
     if(label->offset){
       f->rd.offset = label->offset;
     }else{
@@ -1161,7 +1161,7 @@ bool pop_label(wasm_execution_context * ctx, bool move){
 
 void pop_label2(wasm_execution_context * ctx, int arity){
   wasm_control_stack_frame * f = ctx->frames + ctx->frame_ptr;
-  wasm_label * label = ctx->labels + f->block - (1 + arity);
+  wasm_label * label = ctx->labels + f->block + f->label_offset - (1 + arity);
   if(label->offset){
     f->rd.offset = label->offset;
     for(int i = 0; i < arity; i++){
@@ -1184,9 +1184,9 @@ void push_label(wasm_execution_context * ctx, u8 blktype, bool forward){
   if(c > 0){
     ctx->labels = realloc(ctx->labels, (ctx->label_capacity + c) * sizeof(ctx->labels[0]));
   }
-  wasm_label * label = ctx->labels + f->block - 1;
+  wasm_label * label = ctx->labels + f->label_offset + f->block - 1;
   label->type = blktype;
-  label->offset = forward ? 0 : f->rd.offset; 
+  label->offset = forward ? 0 : f->rd.offset;
 }
 
 void return_from(wasm_execution_context * ctx){
@@ -1211,8 +1211,12 @@ bool push_stack_frame(wasm_execution_context * ctx){
   }else{
     changed = false;
   }
+  wasm_control_stack_frame * f = ctx->frames + ctx->frame_ptr;
+  u32 block = f->block + f->label_offset;
   ctx->frame_ptr += 1;
-  memset(ctx->frames + ctx->frame_ptr, 0, sizeof(ctx->frames[0]));
+  f += 1;
+  memset(f, 0, sizeof(ctx->frames[0]));
+  f->label_offset = block;
 
   return changed;
 }
@@ -1238,6 +1242,11 @@ void wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
     wasm_instr instr = reader_read1(rd);
     logd("INSTRUCTION %x: %x (/%x)\n", rd->offset, instr, stepcount);
     switch(instr){
+    case WASM_INSTR_NOP:
+      {
+	ERROR("NOP NOT SUPPORTED");
+      }
+      break;
     case WASM_INSTR_BLOCK:
       {
 	u8 blktype = reader_read1(rd);
@@ -1248,6 +1257,7 @@ void wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
       {
 	logd("LOOP\n");
 	u8 blktype = reader_read1(rd);
+	
 	push_label(ctx, blktype, false);
       }
       break;
@@ -1258,7 +1268,7 @@ void wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
 	u64 cnd;
 	wasm_pop_u64(ctx, &cnd);
 	if(cnd){
-	  logd("ENTER IF %x\n", reader_read1(rd));
+	  logd("ENTER IF %x %p\n", reader_read1(rd), cnd);
 	  rd->offset -= 1;
 	}else{
 	  logd("ENTER ELSE\n");	
@@ -1335,7 +1345,7 @@ void wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
       break;
     case WASM_INSTR_CALL:
       {
-	u32 fcn = reader_read1(rd);
+	u32 fcn = reader_readu32(rd);
 	if(fcn > mod->func_count){
 	  ERROR("Unknown function %i\n", fcn);
 	}
@@ -1706,7 +1716,6 @@ void wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
       BINARY_OP_U64(f32, <=);
     case WASM_INSTR_F32_GE:
       BINARY_OP_U64(f32, <=);
-
     case WASM_INSTR_F64_EQ:
       BINARY_OP_U64(f64, ==);
     case WASM_INSTR_F64_NE:
@@ -1885,9 +1894,14 @@ int main(int argc, char ** argv){
   char * file = NULL;
   char * entrypoint = NULL;
   bool diagnostic = false;
+  bool test = false;
   for(int i = 1; i < argc; i++){
     if(strcmp(argv[i], "--diagnostic") == 0){
       diagnostic = true;
+      continue;
+    }
+    if(strcmp(argv[i], "--test") == 0){
+      test = true;
       continue;
     }
     if(file == NULL)
@@ -1918,14 +1932,17 @@ int main(int argc, char ** argv){
       }
     }
   }
-  if(false){
-  if(funcindex != -1){
-    logd("Executing...\n");
-    wasm_push_i32(&ctx, 0);
-    wasm_push_i32(&ctx, 0);
-    u8 some_code[] = {WASM_INSTR_CALL, (u8) funcindex};
-    wasm_code_reader rd = {.data = some_code, .size = sizeof(some_code), .offset = 0};
-    wasm_exec_code(&ctx, &rd, false, 0, 0);
+  if(!test){
+    if(funcindex != -1){
+      int main_index = func_index(mod, entrypoint);
+      if(main_index == -1){
+	log("Unable to lookup function '%s'", entrypoint);
+	return 1;
+      }
+      logd("Executing... %i\n", main_index);
+      u8 code[] = {WASM_INSTR_I32_CONST, 0, WASM_INSTR_I32_CONST, 0, WASM_INSTR_CALL, (u8) funcindex};
+      
+      wasm_exec_code3(&ctx, code, sizeof(code), 2000000);
   }
   }else{
     if(true){

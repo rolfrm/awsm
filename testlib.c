@@ -76,6 +76,7 @@ void test_math(int five, int seven){
 
 
 void test_math_i64(long long five, long long seven){
+
   require_i64(5, five);
   require_i64(-5, -five);
   require_i64(7, seven);
@@ -152,7 +153,6 @@ int main(){
   
   print_str("\nTEST MATH F64\n\n");
   test_math_f64(5.0, 7.0);
-
   
 
   print_str("\nMore Stuff\n\n");
@@ -174,10 +174,10 @@ int main(){
     fail();
   }
   free(malloc(10000));
-
+  
   return 0;
 }
-/*
+
 // this test function uses syscall 4 to print "Hello World!".
 void test2(){
   char * str = "Hello World!\n";
@@ -254,8 +254,9 @@ void trace_distancefield(){
       fail();
     
     float d = distance(x,y,z);
-    if(d <= 0){
-      print_str("BREAK\n");
+    print_f32(d);print_str("\n");
+    if(d <= 0.0f){
+      print_str(": BREAK\n");
       break;
     }
     x += dx * d;
@@ -271,4 +272,4 @@ void test_everything(){
   main();
   trace_distancefield();
 }
-*/
+
