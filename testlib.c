@@ -271,5 +271,6 @@ void test_everything(){
   hello_world();
   main();
   trace_distancefield();
+  //printf("OK?\n");
 }
 

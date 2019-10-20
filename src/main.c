@@ -266,7 +266,7 @@ typedef enum WASM_INSTR{
   WASM_INSTR_I32_TRUNC_F64_S = 0xAA,
   WASM_INSTR_I32_TRUNC_F64_U = 0xAB,
   WASM_INSTR_I64_EXTEND_I32_S = 0xAC,
-  WASM_INSTR_I64_EXTEND_I32_U = 0xAD,  
+  WASM_INSTR_I64_EXTEND_I32_U = 0xAD,
   
   WASM_INSTR_F64_REINTERPRET_I64 = 0xBF
 }wasm_instr;
@@ -1512,7 +1512,7 @@ void wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
       break;
     case WASM_INSTR_CALL_INDIRECT:
       {
-	ERROR("UNSUPPORTED\n");
+
 	/*u32 ind =*/ reader_readu32(rd);
 	u32 fcn;
 	wasm_pop_u32(ctx, &fcn);
@@ -1520,14 +1520,40 @@ void wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
 	  ERROR("Invalid indirect call: %i\n", fcn);
 	}
 	fcn = mod->import_table[fcn];
-	wasm_function * f = mod->func + fcn;
-	logd("CALL INDIRECT %s (%i)\n", f->name, fcn);
-	if(f->import) ERROR("Cannot indirectly call builtin\n");
-	wasm_code_reader rd = {.data = f->code, .size = f->length, .offset = 0};
-	wasm_exec_code(ctx, &rd, true, f->argcount, f->retcount);
+	wasm_function * fn = mod->func + fcn;
+	logd("CALL INDIRECT %s (%i)\n", fn->name, fcn);
+	if(fn->import) ERROR("Cannot indirectly call builtin\n");
+	push_stack_frame(ctx);
+	f = ctx->frames + ctx->frame_ptr;
+	rd = &f->rd;
+	f->retcount = fn->retcount;
+	f->stack_pos = ctx->stack_ptr - fn->argcount;
+	f->argcount = fn->argcount;
+	rd[0] = (wasm_code_reader){.data = fn->code, .size = fn->length, .offset = 0};
+	u32 l = reader_readu32(rd);
+	for(u32 i = 0; i < l; i++){
+	  u32 elemcount = reader_readu32(rd);
+	  u8 type = reader_read1(rd);
+	  
+	  { // sanity check
+	    switch(type){
+	    case WASM_TYPE_F64:
+	    case WASM_TYPE_F32:
+	    case WASM_TYPE_I32:
+	    case WASM_TYPE_I64:
+	      break;
+	    default:
+	      ERROR("Unsupported type\n");
+	    }
+	  }
+	  for(u32 i = 0; i < elemcount; i++){
+	    wasm_push_u64(ctx, 0);
+	  }
+	  f->localcount += elemcount;
+	}
+	f->localcount += fn->argcount;
       }
       break;
-      
     case WASM_INSTR_DROP:
       wasm_stack_drop(ctx);
       break;
