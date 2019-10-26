@@ -51,7 +51,6 @@ i64 addi64(i64 x, i64 y){
   return x + y;
 }
 
-
 void test_math(int five, int seven){
   require_i32(5, five);
   require_i32(-5, -five);
@@ -77,6 +76,7 @@ void test_math(int five, int seven){
 
 
 void test_math_i64(long long five, long long seven){
+
   require_i64(5, five);
   require_i64(-5, -five);
   require_i64(7, seven);
@@ -107,7 +107,6 @@ void test_math_f32(float five, float seven){
   require_f32(5.f / 7.f, five / seven);
 }
 
-
 void test_math_f64(double five, double seven){
   require_f64(5, five);
   require_f64(-5, -five);
@@ -137,19 +136,24 @@ int main(){
 
   print_str("\"Hello World!\"\n");
 
-  add_things2(6, 5); 
+  add_things2(6, 5);
+
+  add_things2(6, 5);
+
   print_str("\"Lets run some tests!!\"\n\n");
+
   test_math(5, 7);
+
   print_str("\nTEST MATH I64\n\n");
 
   test_math_i64(5L, 7L);
-
-
+  
   print_str("\nTEST MATH F32\n\n");
   test_math_f32(5.0f, 7.0f);
   
   print_str("\nTEST MATH F64\n\n");
   test_math_f64(5.0, 7.0);
+  
 
   print_str("\nMore Stuff\n\n");
   srand(1234321);
@@ -158,16 +162,20 @@ int main(){
   add_things(1,2);
 
   vec2 z = vec2_new(4,5);
+  require_f32(4.0f, z.x);
   vec2 y = vec2_new(7,8);
   vec2 x = vec2_add(z, &y);
   require_f32(11.0f, x.x);
   require_f32(13.0f, x.y);
-
+  print_i32((int) malloc(10));
+  print_i32((int) malloc(10));
+  print_i32((int) malloc(10));
+  print_i32((int) malloc(10));
   if(malloc(10) == malloc(10)){
     fail();
   }
   free(malloc(10000));
-
+  
   return 0;
 }
 
@@ -247,8 +255,9 @@ void trace_distancefield(){
       fail();
     
     float d = distance(x,y,z);
-    if(d <= 0){
-      print_str("BREAK\n");
+    print_f32(d);print_str("\n");
+    if(d <= 0.0f){
+      print_str(": BREAK\n");
       break;
     }
     x += dx * d;
@@ -263,4 +272,6 @@ void test_everything(){
   hello_world();
   main();
   trace_distancefield();
+  //printf("OK?\n");
 }
+
