@@ -53,6 +53,7 @@ static void _log(const char * msg, ...){
   va_end(arglist);
 }
 
+
 #define MAX(X,Y)(X > Y ? X : Y)
 #define MIN(X,Y)(X < Y ? X : Y)
 #define SIGN(x) (x > 0 ? 1 : (x < 0 ? -1 : 0))
@@ -611,9 +612,9 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
 
     case WASM_TYPE_SECTION:
       {
-	logd("WASM TYPE SECTION\n");
+
 	u32 length = reader_readu32(rd);
-	logd("Type section: %i bytes\n", length);
+	logd("WASM TYPE SECTION %i\n", length);
 	u32 typecount = reader_readu32(rd);
 	module.type_count = typecount;
 	module.types = alloc0(sizeof(module.types[0]) * module.type_count);
@@ -632,14 +633,14 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
 	  }
 	  module.types[typeidx].argcount = paramcount;
 	  module.types[typeidx].retcount = returncount;
-	  
 	}
 	break;
       }
     case WASM_IMPORT_SECTION:
       {
-	logd("IMPORT SECTION\n");
+
 	u32 length = reader_readu32(rd);
+	logd("IMPORT SECTION %i\n", length);
 	u32 guard = reader_getloc(rd);
 	u32 importCount = reader_readu32(rd);
 	logd("Import count: %i\n", importCount);
@@ -657,7 +658,6 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
 	      wasm_module_add_func(&module);
 	      wasm_function * f = module.func + module.import_func_count;
 	      module.import_func_count += 1;
-
 
 	      f->name = name;
 	      f->import = true;
@@ -699,7 +699,7 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
 	    {
 	      wasm_type type = (wasm_type) reader_read1(rd);
 	      bool mut = reader_read1(rd);
-	      logd("IMPORT GLOBAL: %s %s %s %i\n", module, name, mut ? "mutable" : "const", type);
+	      ERROR("IMPORT GLOBAL: %s %s %s %i\n", module, name, mut ? "mutable" : "const", type);
 	      break;
 	    }
 	  }
@@ -759,9 +759,6 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
 	    ERROR("Unsupported operation\n");
 	  }
 	}
-
-	
-	//reader_advance(rd, length);
       }
       break;
     case WASM_GLOBAL_SECTION:
@@ -1488,14 +1485,14 @@ int wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
 	    {
 	      i32 v;
 	      wasm_pop_i32(ctx, &v);
-	      log("I32: %i\n", v);
+	      log("%i\n", v);
 	    }
 	    break;
 	  case WASM_BUILTIN_PRINT_I64:
 	    {
 	      i64 v;
 	      wasm_pop_i64(ctx, &v);
-	      log("I64: %p\n", v);
+	      log("%i\n", v);
 	    }
 	    break;
 	  case WASM_BUILTIN_PRINT_STR:
@@ -1661,7 +1658,6 @@ int wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
 	break;
       }
 
-
     case WASM_INSTR_I32_LOAD:
       load_op(rd, ctx, 4);
       break;
@@ -1732,7 +1728,7 @@ int wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
 	newsize = newsize;
 	wasm_heap_min_capacity(mod->heap, newsize * WASM_PAGE_SIZE);
 	wasm_push_u32(ctx, newsize);
-	logd("New memory size: %p\n", newsize);
+	logd("MEMORY GROW: New memory size: %p\n", newsize);
       }
       break;
     case WASM_INSTR_I64_CONST:
