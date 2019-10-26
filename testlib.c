@@ -162,6 +162,7 @@ int main(){
   add_things(1,2);
 
   vec2 z = vec2_new(4,5);
+  require_f32(4.0f, z.x);
   vec2 y = vec2_new(7,8);
   vec2 x = vec2_add(z, &y);
   require_f32(11.0f, x.x);
