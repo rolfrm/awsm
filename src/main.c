@@ -6,6 +6,7 @@
 #include <math.h>
 #include <stdarg.h>
 #include <signal.h>
+#include <dlfcn.h>
 typedef int32_t i32;
 typedef int64_t i64;
 
@@ -16,6 +17,9 @@ typedef uint64_t u64;
 typedef float f32;
 typedef double f64;
 #define UNUSED(x) (void)(x)
+#define MAX(X,Y)(X > Y ? X : Y)
+#define MIN(X,Y)(X < Y ? X : Y)
+#define SIGN(x) (x > 0 ? 1 : (x < 0 ? -1 : 0))
 
 static void _error(const char * file, int line, const char * msg, ...){
   UNUSED(file);UNUSED(line);UNUSED(msg);
@@ -52,11 +56,6 @@ static void _log(const char * msg, ...){
   vprintf(msg,arglist);
   va_end(arglist);
 }
-
-
-#define MAX(X,Y)(X > Y ? X : Y)
-#define MIN(X,Y)(X < Y ? X : Y)
-#define SIGN(x) (x > 0 ? 1 : (x < 0 ? -1 : 0))
 
 static void * alloc0(size_t size){
   void * ptr = malloc(size);
@@ -121,7 +120,6 @@ typedef enum WASM_INSTR{
   WASM_INSTR_CALL_INDIRECT = 0x11,
   WASM_INSTR_DROP = 0x1A,
   WASM_INSTR_SELECT = 0x1B,
-  
   WASM_INSTR_LOCAL_GET = 0x20,
   WASM_INSTR_LOCAL_SET = 0x21,
   WASM_INSTR_LOCAL_TEE = 0x22,
@@ -167,7 +165,6 @@ typedef enum WASM_INSTR{
   WASM_INSTR_I32_LE_U = 0x4D,
   WASM_INSTR_I32_GE_S = 0x4E,
   WASM_INSTR_I32_GE_U = 0x4F,
-  
   WASM_INSTR_I64_EQZ = 0x50,
   WASM_INSTR_I64_EQ = 0x51,
   WASM_INSTR_I64_NE = 0x52,  
@@ -179,21 +176,18 @@ typedef enum WASM_INSTR{
   WASM_INSTR_I64_LE_U = 0x58,
   WASM_INSTR_I64_GE_S = 0x59,
   WASM_INSTR_I64_GE_U = 0x5a,
-
   WASM_INSTR_F32_EQ = 0x5b,
   WASM_INSTR_F32_NE = 0x5c,
   WASM_INSTR_F32_LT = 0x5d,
   WASM_INSTR_F32_GT = 0x5e,
   WASM_INSTR_F32_LE = 0x5f,
   WASM_INSTR_F32_GE = 0x60,  
-
   WASM_INSTR_F64_EQ = 0x61,
   WASM_INSTR_F64_NE = 0x62,
   WASM_INSTR_F64_LT = 0x63,
   WASM_INSTR_F64_GT = 0x64,
   WASM_INSTR_F64_LE = 0x65,
   WASM_INSTR_F64_GE = 0x66,  
-
   WASM_INSTR_I32_ADD = 0x6a,
   WASM_INSTR_I32_SUB = 0x6B,
   WASM_INSTR_I32_MUL = 0x6C,
@@ -209,7 +203,6 @@ typedef enum WASM_INSTR{
   WASM_INSTR_I32_SHR_U = 0x76,
   WASM_INSTR_I32_ROTL = 0x77,
   WASM_INSTR_I32_ROTR = 0x78,
-  
   WASM_INSTR_I64_CLZ = 0x79,
   WASM_INSTR_I64_CTZ = 0x7A,
   WASM_INSTR_I64_POPCNT = 0x7B,
@@ -228,7 +221,6 @@ typedef enum WASM_INSTR{
   WASM_INSTR_I64_SHR_U = 0x88,
   WASM_INSTR_I64_ROTL = 0x89,
   WASM_INSTR_I64_ROTR = 0x8A,
-
   WASM_INSTR_F32_ABS = 0x8B,
   WASM_INSTR_F32_NEG = 0x8C,
   WASM_INSTR_F32_CEIL = 0x8D,
@@ -243,7 +235,6 @@ typedef enum WASM_INSTR{
   WASM_INSTR_F32_MIN = 0x96,
   WASM_INSTR_F32_MAX = 0x97,
   WASM_INSTR_F32_COPYSIGN = 0x98,
-
   WASM_INSTR_F64_ABS = 0x99,
   WASM_INSTR_F64_NEG = 0x9A,
   WASM_INSTR_F64_CEIL = 0x9B,
@@ -258,9 +249,7 @@ typedef enum WASM_INSTR{
   WASM_INSTR_F64_MIN = 0xA4,
   WASM_INSTR_F64_MAX = 0xA5,
   WASM_INSTR_F64_COPYSIGN = 0xA6,  
-  
   WASM_INSTR_I32_WRAP_I64 = 0xA7,
-
   WASM_INSTR_I32_TRUNC_F32_S = 0xA8,
   WASM_INSTR_I32_TRUNC_F32_U = 0xA9,
   WASM_INSTR_I32_TRUNC_F64_S = 0xAA,
@@ -293,15 +282,15 @@ typedef enum WASM_TYPE{
   WASM_TYPE_F32 = 0x7D,
   WASM_TYPE_I64 = 0x7E,
   WASM_TYPE_I32 = 0x7F
-
 }wasm_type;
 
 typedef enum WASM_IMPORT_TYPE{
   WASM_IMPORT_FUNC = 0,
   WASM_IMPORT_TABLE = 1,
   WASM_IMPORT_MEM = 2,
-  WASM_IMPORT_GLOBAL = 3
+  WASM_IMPORT_GLOBAL =3
 }wasm_import_type;
+
 typedef enum WASM_BUILTIN_FCN{
   WASM_BUILTIN_UNRESOLVED = 0,
   WASM_BUILTIN_REQUIRE_I32,
@@ -312,7 +301,8 @@ typedef enum WASM_BUILTIN_FCN{
   WASM_BUILTIN_PRINT_I64,
   WASM_BUILTIN_PRINT_STR,
   WASM_BUILTIN_PRINT_F32,
-  WASM_BUILTIN_SBRK
+  WASM_BUILTIN_SBRK,
+  WASM_BUILTIN_GET_SYMBOL
 }wasm_builtin_fcn;
 
 typedef struct{
@@ -323,8 +313,6 @@ typedef struct{
   int type;
   u32 argcount;
   u32 retcount;
-  // unpack the code for better performance. This is skipped for now.
-  //bool resolved; 
   bool import;
   wasm_builtin_fcn builtin;
 }wasm_function;
@@ -585,7 +573,7 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
   reader_read(rd, magic_header, sizeof(magic_header));
   bool contains_magic = memcmp(magic_header_test, magic_header, 4) == 0;
   if(contains_magic == false){
-    ERROR("File does not contain correct header");
+    ERROR("WASM data does not contain correct header");
     return NULL;
   }
 
@@ -594,7 +582,7 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
   reader_read(rd, wasm_version, sizeof(wasm_version));
   bool contains_version = memcmp(wasm_version,wasm_version_test, sizeof(wasm_version)) == 0;
   if(contains_version == false){
-    ERROR("File does not contain correct header");
+    ERROR("WASM data does not contain correct header");
     return NULL;
   }
   
@@ -992,11 +980,11 @@ static void wasm_push_data(wasm_execution_context * ctx, void * data, size_t siz
 
   if(new_size > ctx->stack_capacity){
     ctx->stack = realloc(ctx->stack, sizeof(ctx->stack[0]) * (ctx->stack_capacity = (ctx->stack_capacity + 1) * 2));
-    logd("increasing stack to %i\n", ctx->stack_capacity);
+    logd("increasing stack capacity to %i\n", ctx->stack_capacity);
   }
-  if(size < 8)
-    memset(ctx->stack + ctx->stack_ptr, 0, sizeof(u64));
-  memmove(ctx->stack + ctx->stack_ptr, data, size);
+  u64 towrite = 0;
+  memmove(&towrite, data, size);
+  ctx->stack[ctx->stack_ptr] = towrite;
   logd("PUSH %i: %p\n", size, ((u64 *) ctx->stack + ctx->stack_ptr)[0]);
   ctx->stack_ptr = new_size;
 }
@@ -1426,6 +1414,8 @@ int wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
 	      fn->builtin = WASM_BUILTIN_REQUIRE_F64;
 	    }else if(nameis("sbrk")){
 	      fn->builtin = WASM_BUILTIN_SBRK;
+	    }else if(nameis("get_symbol")){
+	      fn->builtin = WASM_BUILTIN_GET_SYMBOL;
 	    }
 	    else{
 	      ERROR("Unknown import: %s\n", fn->name);
@@ -1523,6 +1513,22 @@ int wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
 		mod->heap->heap = realloc(mod->heap->heap, mod->heap->capacity += v);
 	      break;
 	    }
+	  case WASM_BUILTIN_GET_SYMBOL:
+	    {
+	      u64 _module, _symbol, argcount, retcount;
+	      wasm_pop_u64(ctx, &retcount);
+	      wasm_pop_u64(ctx, &argcount);
+	      wasm_pop_u64(ctx, &_symbol);
+	      wasm_pop_u64(ctx, &_module);
+	      char * module = mod->heap->heap + _module;
+	      char * ep = mod->heap->heap + _symbol;
+	      void * dl = dlopen(module, RTLD_GLOBAL | RTLD_NOW);
+	      void * ep2 = dlsym(dl, ep);
+	      
+	      logd("GET SYMBOL '%s' %s, %p %p, %i %i %i\n", module,ep, dl, ep2, _symbol, argcount, retcount);
+	      wasm_push_u32(ctx, 0);
+	    }
+	    break;
 	  default:
 	    ERROR("UNKNOWN BUILTIN COMMAND\n");
 	  }
@@ -2037,7 +2043,6 @@ int main(int argc, char ** argv){
   wasm_heap heap = {0};
   wasm_code_reader rd = {.data = data, .size = buffer_size, .offset = 0};
   wasm_module * mod = load_wasm_module(&heap, &rd);
-
   for(u32 i = 0; i < mod->func_count; i++){
     logd("  Func: %i '%s'\n", i, mod->func[i].name);
   }

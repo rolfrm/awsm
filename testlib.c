@@ -12,6 +12,21 @@ void require_i32(int expected, int actual);
 void require_i64(long long expected, long long actual);
 void require_f32(float expected, float actual);
 void require_f64(double expected, double actual);
+
+void * get_symbol(const char * module, const char * symbol, unsigned int argcount, unsigned int retcount);
+
+typedef struct _gl_window gl_window;
+
+
+gl_window * (* _gl_window_open)(int width, int height);
+
+gl_window * gl_window_open(int width, int height){
+  if(_gl_window_open == NULL){
+    _gl_window_open = get_symbol("iron", "gl_window_open", 2, 1);
+  }
+  return _gl_window_open(width, height);
+}
+
 int myvalue = 100;
 char * globthing = "hellohello";
 void fail(){
@@ -132,7 +147,11 @@ vec2 vec2_add(vec2 a, vec2 *b){
   return a;
 }
 
-int main(){
+void hello_world(){
+  print_str("\"Hello World!\"\n");
+}
+
+int test_main(){
 
   print_str("\"Hello World!\"\n");
 
@@ -156,6 +175,7 @@ int main(){
   
 
   print_str("\nMore Stuff\n\n");
+  /*
   srand(1234321);
   print_i32(rand());
   print_i32(rand());
@@ -167,6 +187,7 @@ int main(){
   vec2 x = vec2_add(z, &y);
   require_f32(11.0f, x.x);
   require_f32(13.0f, x.y);
+  
   print_i32((int) malloc(10));
   print_i32((int) malloc(10));
   print_i32((int) malloc(10));
@@ -175,7 +196,7 @@ int main(){
     fail();
   }
   free(malloc(10000));
-  
+  */
   return 0;
 }
 
@@ -183,10 +204,6 @@ int main(){
 void test2(){
   char * str = "Hello World!\n";
   write(0, str, strlen(str));
-}
-
-void hello_world(){
-  print_str("Kello World!\n");
 }
 
 typedef struct{
@@ -267,11 +284,33 @@ void trace_distancefield(){
   }
 }
 
-void test_everything(){
+int calc_hash(int * data, size_t s){
+  int result = 0;
+  result = data[0] * 3256983;
+  for(size_t i = 1; i < s; i++){
+    result = data[i] * (3256983 * i) ^ result;
+  }
+  return result;
+}
+
+int main(){
   test2();
   hello_world();
-  main();
+  test_main();
   trace_distancefield();
+
+  int data[10];
+  data[0] = 3;
+  data[2] = 1;
+  data[6] = 6;
+  int hash = calc_hash(data, 10);
+  print_str("HASH: ");
+  print_i32(hash);
+  print_str("\n");
   //printf("OK?\n");
+  //gl_window * win = gl_window_open(512, 512);
+  void * pt = get_symbol("/usr/lib/x86_64-linux-gnu/libglfw.so", "malloc", 2, 1);
+  void * pt2 = get_symbol("/usr/lib/x86_64-linux-gnu/libglfw.so", "malloc", 2, 1);
+  return 0;
 }
 

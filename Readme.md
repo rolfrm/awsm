@@ -13,7 +13,7 @@
 **Step 2** Compile test library
 
 ```sh
->> emcc ./testlib.c -Os -o testlib.wasm -s EXPORT_ALL=1 -s ERROR_ON_UNDEFINED_SYMBOLS=0
+>> emcc ./testlib.c -Os -o testlib.wasm -s EXPORT_ALL=1 -s ERROR_ON_UNDEFINED_SYMBOLS=0 -s TOTAL_MEMORY=1MB -s TOTAL_STACK=128kB -s ALLOW_MEMORY_GROWTH=1 -s EXPORTED_FUNCTIONS='["_add", "_main", "_fib", "_test_everything"]'
 ```
 
 **Step 3** Run
