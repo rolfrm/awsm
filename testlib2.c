@@ -32,18 +32,17 @@ int main(){
   for(float y = 0.2; y < 5; y*=2){
     x += y + y2;
     y2 = y2 + 0.01;
-
   }
   print_f32(y2);
   print_str(" ");
   print_f32(x);
   print_str("\n");
-  /*
+  
   print_f32(x);
   print_str("\n");
   print_i32(fib(10));
   print_str("\n");
-  print_f32(y2);*/
+
   /*while(1){
     a[0] += 1;
     }*/

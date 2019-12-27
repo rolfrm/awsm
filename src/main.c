@@ -771,7 +771,8 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
   for(u32 i = 0; i < module.func_count; i++){
     logd("  Func: %i '%s'\n", i, module.func[i].name);
     if(module.func[i].name == NULL) continue;
-    if(strcmp(module.func[i].name, "print_str") == 0 || (strcmp(module.func[i].name, "print_i32") == 0 || (strcmp(module.func[i].name, "print_f32") == 0)){
+    if(strcmp(module.func[i].name, "print_str") == 0 || (strcmp(module.func[i].name, "print_i32") == 0 || (strcmp(module.func[i].name, "print_f32") == 0)))
+      {
       module.func[i].builtin = WASM_BUILTIN_UNRESOLVED;
       module.func[i].import = true;
     }
@@ -1123,6 +1124,7 @@ bool push_stack_frame(wasm_execution_context * ctx){
 }
 
 int func_index(wasm_module * mod, const char * name){
+  if(name == NULL) return -1;
   for(u32 i = 0; i < mod->func_count; i++){
     if(mod->func[i].name != NULL && strcmp(name, mod->func[i].name) == 0){
       return i;
@@ -1901,7 +1903,7 @@ int main(int argc, char ** argv){
   if(!test){
     int main_index = func_index(mod, entrypoint);
     if(main_index == -1){
-      log("Unable to lookup function '%s'", entrypoint);
+      log("Unable to lookup function '%s'\n", entrypoint);
       return 1;
     }
     logd("Executing... %i\n", main_index);
