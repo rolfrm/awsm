@@ -68,6 +68,13 @@ static void * alloc(size_t size){
   return alloc0(size);
 }
 
+static void * mem_clone(void * ptr, size_t s){
+  void * new = alloc(s);
+  memcpy(new, ptr, s);
+  return new;
+}
+
+
 static void * read_stream_to_buffer(FILE * f, size_t * size){
   if(f == NULL)
     return NULL;
@@ -131,7 +138,10 @@ typedef enum WASM_BUILTIN_FCN{
   WASM_BUILTIN_PRINT_STR,
   WASM_BUILTIN_PRINT_F32,
   WASM_BUILTIN_SBRK,
-  WASM_BUILTIN_GET_SYMBOL
+  WASM_BUILTIN_GET_SYMBOL,
+  WASM_BUILTIN_GO,
+  WASM_BUILTIN_YIELD,
+  WASM_BUILTIN_FORK
 }wasm_builtin_fcn;
 
 typedef struct{
@@ -156,6 +166,8 @@ typedef struct{
   size_t capacity;
 }wasm_heap;
 
+typedef struct _wasm_execution_stack wasm_execution_stack;
+
 typedef struct{
   wasm_function * func;
   size_t func_count;
@@ -173,8 +185,12 @@ typedef struct{
 
   u64 * globals;
   size_t global_count;
-  
+
+  wasm_execution_stack ** stacks;
+  u32 stack_count;
 }wasm_module;
+
+void wasm_fork_stack(wasm_execution_stack * ctx);
 
 static void wasm_heap_min_capacity(wasm_heap * heap, size_t capacity){
   if(heap->capacity < capacity){
@@ -771,7 +787,13 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
   for(u32 i = 0; i < module.func_count; i++){
     logd("  Func: %i '%s'\n", i, module.func[i].name);
     if(module.func[i].name == NULL) continue;
-    if(strcmp(module.func[i].name, "print_str") == 0 || (strcmp(module.func[i].name, "print_i32") == 0 || (strcmp(module.func[i].name, "print_f32") == 0)))
+    if(strcmp(module.func[i].name, "print_str") == 0
+       || (strcmp(module.func[i].name, "print_i32") == 0)
+       || (strcmp(module.func[i].name, "print_f32") == 0)
+       || (strcmp(module.func[i].name, "awsm_go") == 0)
+       || (strcmp(module.func[i].name, "awsm_fork") == 0)
+       || (strcmp(module.func[i].name, "awsm_yield") == 0)
+       )
       {
       module.func[i].builtin = WASM_BUILTIN_UNRESOLVED;
       module.func[i].import = true;
@@ -789,7 +811,7 @@ typedef struct{
   u32 stack_pos;
   u32 localcount;
   u32 retcount;
-  u32 argcount;
+  //u32 argcount;
   wasm_code_reader rd;
 }wasm_control_stack_frame;
 
@@ -799,7 +821,7 @@ typedef struct{
 }wasm_label;
 
 // everything on the wasm execution stack is a 64bit value.
-typedef struct{
+struct _wasm_execution_stack{
   u64 * stack;
   size_t stack_capacity;
   size_t stack_ptr;
@@ -812,15 +834,22 @@ typedef struct{
   u32 label_capacity;
     
   wasm_module * module;
-}wasm_execution_context;
+};
 
-static void wasm_stack_drop(wasm_execution_context * ctx){
+
+void wasm_module_add_stack(wasm_module * module, wasm_execution_stack * stk){
+  module->stacks = realloc(module->stacks, sizeof(module->stacks[0]) * (module->stack_count += 1));
+  module->stacks[module->stack_count - 1] = stk;
+  stk->module = module;
+}
+
+static void wasm_stack_drop(wasm_execution_stack * ctx){
   ASSERT(ctx->stack_ptr > 0);
   logd("STACK DROP %i\n", ctx->stack_ptr);
   ctx->stack_ptr -= 1;
 }
 
-static void * wasm_stack_next(wasm_execution_context * ctx){
+static void * wasm_stack_next(wasm_execution_stack * ctx){
   ctx->stack_ptr += 1;
   if(ctx->stack_ptr > ctx->stack_capacity){
     ctx->stack = realloc(ctx->stack, sizeof(ctx->stack[0]) * (ctx->stack_capacity = (ctx->stack_capacity + 1) * 2));
@@ -830,7 +859,7 @@ static void * wasm_stack_next(wasm_execution_context * ctx){
   return &ctx->stack[ctx->stack_ptr - 1];
 }
 
-static void wasm_push_data(wasm_execution_context * ctx, void * data, size_t size){
+static void wasm_push_data(wasm_execution_stack * ctx, void * data, size_t size){
   ASSERT(size <= 8);
   void * s = wasm_stack_next(ctx);
   u64 towrite = 0;
@@ -838,40 +867,40 @@ static void wasm_push_data(wasm_execution_context * ctx, void * data, size_t siz
   memcpy(s, &towrite, sizeof(towrite));
 }
 
-static void wasm_push_i32(wasm_execution_context * ctx, i32 v){
+static void wasm_push_i32(wasm_execution_stack * ctx, i32 v){
   i32 * s = wasm_stack_next(ctx);
   s[0] = v;
   s[1] = 0;
 }
 
-static void wasm_push_u32(wasm_execution_context * ctx, u32 v){
+static void wasm_push_u32(wasm_execution_stack * ctx, u32 v){
   u32 * s = wasm_stack_next(ctx);
   s[0] = v;
   s[1] = 0;
 }
 
-static void wasm_push_u64(wasm_execution_context * ctx, u64 v){
+static void wasm_push_u64(wasm_execution_stack * ctx, u64 v){
   u64 * s = wasm_stack_next(ctx);
   s[0] = v;
 }
 
-static void wasm_push_i64(wasm_execution_context * ctx, i64 v){
+static void wasm_push_i64(wasm_execution_stack * ctx, i64 v){
   i64 * s = wasm_stack_next(ctx);
   s[0] = v;
 }
 
-static void wasm_push_f32(wasm_execution_context * ctx, f32 v){
+static void wasm_push_f32(wasm_execution_stack * ctx, f32 v){
   f32 * s = wasm_stack_next(ctx);
   s[0] = v;
   s[1] = 0;
 }
 
-static void wasm_push_f64(wasm_execution_context * ctx, f64 v){
+static void wasm_push_f64(wasm_execution_stack * ctx, f64 v){
   f64 * s = wasm_stack_next(ctx);
   s[0] = v;
 }
 
-static void wasm_pop_data(wasm_execution_context * ctx, void * out){
+static void wasm_pop_data(wasm_execution_stack * ctx, void * out){
 
   ASSERT(ctx->stack_ptr > 0);
   ctx->stack_ptr -= 1;
@@ -879,69 +908,69 @@ static void wasm_pop_data(wasm_execution_context * ctx, void * out){
   logd("POP %i %p\n", ctx->stack_ptr, ((u64 *) out)[0]);
 }
 
-static void wasm_pop_data_2(wasm_execution_context * ctx, void * out){
+static void wasm_pop_data_2(wasm_execution_stack * ctx, void * out){
   logd("POP2 %i %p %p\n", ctx->stack_ptr, ctx->stack[ctx->stack_ptr- 1],ctx->stack[ctx->stack_ptr- 2] );
   ASSERT(ctx->stack_ptr > 1);
   ctx->stack_ptr -= 2;
   memcpy(out, ctx->stack + ctx->stack_ptr, 8 * 2);
 }
 
-static void * wasm_stack_pop(wasm_execution_context * ctx){
+static void * wasm_stack_pop(wasm_execution_stack * ctx){
   ctx->stack_ptr -= 1;
   return &ctx->stack[ctx->stack_ptr];
 }
 
-static void wasm_pop_i32(wasm_execution_context * ctx, i32 * out){
+static void wasm_pop_i32(wasm_execution_stack * ctx, i32 * out){
   i64 val;
   wasm_pop_data(ctx, &val);
   *out = (i32)val;
 }
 
-static void wasm_pop_i32_2(wasm_execution_context * ctx, i32 * out, i32 * out2){
+static void wasm_pop_i32_2(wasm_execution_stack * ctx, i32 * out, i32 * out2){
   i64 val[2];
   wasm_pop_data_2(ctx, val);
   *out = (i32)(val[1]);
   *out2 = (i32)(val[0]);
 }
 
-static void wasm_pop_u32(wasm_execution_context * ctx, u32 * out){
+static void wasm_pop_u32(wasm_execution_stack * ctx, u32 * out){
   i64 val;
   wasm_pop_data(ctx, &val);
   *out = (u32)val;
 }
 
-static void wasm_pop_u32_2(wasm_execution_context * ctx, u32 * out, u32 * out2){
+static void wasm_pop_u32_2(wasm_execution_stack * ctx, u32 * out, u32 * out2){
   u64 val[2];
   wasm_pop_data_2(ctx, val);
   *out = (u32)val[1];
   *out2 = (u32)val[0];
 }
 
-static void wasm_pop_i64(wasm_execution_context * ctx, i64 * out){
+static void wasm_pop_i64(wasm_execution_stack * ctx, i64 * out){
   i64 * val = wasm_stack_pop(ctx);
   *out = val[0];
 }
 
-static void wasm_pop_i64_2(wasm_execution_context * ctx, i64 * out, i64 * out2){
+static void wasm_pop_i64_2(wasm_execution_stack * ctx, i64 * out, i64 * out2){
   i64 * val1 = wasm_stack_pop(ctx);
   i64 * val2 = wasm_stack_pop(ctx);
   *out = val1[0];
   *out2 = val2[0];
 }
 
-static void wasm_pop_u64(wasm_execution_context * ctx, u64 * out){
+static void wasm_pop_u64(wasm_execution_stack * ctx, u64 * out){
   u64 * val = wasm_stack_pop(ctx);
   *out = val[0];
 }
 
-static void wasm_pop_u64_2(wasm_execution_context * ctx, u64 * out, u64 * out2){
+static void wasm_pop_u64_2(wasm_execution_stack * ctx, u64 * out, u64 * out2){
   u64 * val = wasm_stack_pop(ctx);
   *out = *val;
   val = wasm_stack_pop(ctx);
   *out2 = *val;
 }
 
-void wasm_pop2_i64(wasm_execution_context * ctx, i64 * out){
+void wasm_pop2_i64(wasm_execution_stack * ctx, i64 * out){
   union{
     i64 val;
     struct{
@@ -954,7 +983,7 @@ void wasm_pop2_i64(wasm_execution_context * ctx, i64 * out){
   *out = w.val;
 }
 
-static void wasm_pop_f32(wasm_execution_context * ctx, f32 *out){
+static void wasm_pop_f32(wasm_execution_stack * ctx, f32 *out){
   union{
     f32 o;
     u64 d;
@@ -963,7 +992,7 @@ static void wasm_pop_f32(wasm_execution_context * ctx, f32 *out){
   *out = w.o;
 }
 
-static void wasm_pop_f32_2(wasm_execution_context * ctx, f32 *out, f32 * out2){
+static void wasm_pop_f32_2(wasm_execution_stack * ctx, f32 *out, f32 * out2){
   union{
     f32 o;
     u64 d;
@@ -973,7 +1002,7 @@ static void wasm_pop_f32_2(wasm_execution_context * ctx, f32 *out, f32 * out2){
   *out2 = w[0].o;
 }
 
-static void wasm_pop_f64(wasm_execution_context * ctx, f64 * out){
+static void wasm_pop_f64(wasm_execution_stack * ctx, f64 * out){
   union{
     f64 o;
     u64 d;
@@ -982,7 +1011,7 @@ static void wasm_pop_f64(wasm_execution_context * ctx, f64 * out){
   *out = w.o;
 }
 
-static void wasm_pop_f64_2(wasm_execution_context * ctx, f64 * out, f64 * out2){
+static void wasm_pop_f64_2(wasm_execution_stack * ctx, f64 * out, f64 * out2){
   union{
     f64 o;
     u64 d;
@@ -992,11 +1021,11 @@ static void wasm_pop_f64_2(wasm_execution_context * ctx, f64 * out, f64 * out2){
   *out2 = w[0].o;
 }
 
-static void wasm_push_u64r(wasm_execution_context * ctx, u64 * in){
+static void wasm_push_u64r(wasm_execution_stack * ctx, u64 * in){
   wasm_push_data(ctx, in, sizeof(in[0]));
 }
 
-static void load_op(wasm_code_reader * rd, wasm_execution_context * ctx, int bytes){
+static void load_op(wasm_code_reader * rd, wasm_execution_stack * ctx, int bytes){
   reader_readu32(rd); //align
   u32 offset = reader_readu32(rd);
   i32 addr;
@@ -1007,7 +1036,7 @@ static void load_op(wasm_code_reader * rd, wasm_execution_context * ctx, int byt
   wasm_push_data(ctx, valptr, bytes);
 }
 
-static void store_op(wasm_code_reader * rd, wasm_execution_context * ctx, int bytes){
+static void store_op(wasm_code_reader * rd, wasm_execution_stack * ctx, int bytes){
   reader_readu32(rd); // align
   u32 offset = reader_readu32(rd);
   u64 value;
@@ -1020,13 +1049,13 @@ static void store_op(wasm_code_reader * rd, wasm_execution_context * ctx, int by
   memcpy(valptr, &value, bytes);
 }
 
-static u64 * getlocal(wasm_execution_context * ctx, u32 local){
+static u64 * getlocal(wasm_execution_stack * ctx, u32 local){
   wasm_control_stack_frame * f = ctx->frames + ctx->frame_ptr;
   ASSERT(local < f->localcount);
   return ctx->stack + f->stack_pos + local;
 }
 
-bool pop_label(wasm_execution_context * ctx, bool move){
+bool pop_label(wasm_execution_stack * ctx, bool move){
   wasm_control_stack_frame * f = ctx->frames + ctx->frame_ptr;
   if(f->block == 0){
     if(ctx->frame_ptr > 0){
@@ -1063,7 +1092,7 @@ bool pop_label(wasm_execution_context * ctx, bool move){
   return false;
 }
 
-void pop_label2(wasm_execution_context * ctx, int arity){
+void pop_label2(wasm_execution_stack * ctx, int arity){
   wasm_control_stack_frame * f = ctx->frames + ctx->frame_ptr;
   wasm_label * label = ctx->labels + f->block + f->label_offset - (1 + arity);
   if(label->offset){
@@ -1080,7 +1109,7 @@ void pop_label2(wasm_execution_context * ctx, int arity){
   }
 }
 
-void push_label(wasm_execution_context * ctx, u8 blktype, bool forward){
+void push_label(wasm_execution_stack * ctx, u8 blktype, bool forward){
   wasm_control_stack_frame * f = ctx->frames + ctx->frame_ptr;
   f->block += 1;
   int c = f->block + f->label_offset - ctx->label_capacity;
@@ -1092,7 +1121,7 @@ void push_label(wasm_execution_context * ctx, u8 blktype, bool forward){
   label->offset = forward ? 0 : f->rd.offset;
 }
 
-void return_from(wasm_execution_context * ctx){
+void return_from(wasm_execution_stack * ctx){
   wasm_control_stack_frame * f = ctx->frames + ctx->frame_ptr;
   while(f->block > 0){
     wasm_label * label = ctx->labels + f->block - 1;
@@ -1104,7 +1133,7 @@ void return_from(wasm_execution_context * ctx){
   pop_label(ctx, false);
 }
 
-bool push_stack_frame(wasm_execution_context * ctx){
+bool push_stack_frame(wasm_execution_stack * ctx){
   logd("PUSH STACK FRAME ->%i\n", ctx->frame_ptr + 1);
   bool changed;
   if(ctx->frame_ptr + 1 >= ctx->frame_capacity){
@@ -1133,7 +1162,7 @@ int func_index(wasm_module * mod, const char * name){
   return -1;
 }
 
-int wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
+int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
   int startcount = stepcount;
   wasm_control_stack_frame * f = ctx->frames + ctx->frame_ptr;
   wasm_code_reader * rd = &f->rd;
@@ -1276,6 +1305,12 @@ int wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
 	      fn->builtin = WASM_BUILTIN_SBRK;
 	    }else if(nameis("get_symbol")){
 	      fn->builtin = WASM_BUILTIN_GET_SYMBOL;
+	    }else if(nameis("awsm_go")){
+	      fn->builtin = WASM_BUILTIN_GO;
+	    }else if(nameis("awsm_fork")){
+	      fn->builtin = WASM_BUILTIN_FORK;
+	    }else if(nameis("awsm_yield")){
+	      fn->builtin = WASM_BUILTIN_YIELD;
 	    }
 	    else{
 	      ERROR("Unknown import: %s\n", fn->name);
@@ -1389,6 +1424,11 @@ int wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
 	      wasm_push_u32(ctx, 0);
 	    }
 	    break;
+	  case WASM_BUILTIN_FORK:
+	    {
+	      wasm_fork_stack(ctx);
+	    }
+	    break;
 	  default:
 	    ERROR("UNKNOWN BUILTIN COMMAND\n");
 	  }
@@ -1401,7 +1441,7 @@ int wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
 	  rd = &f->rd;
 	  f->retcount = fn->retcount;
 	  f->stack_pos = ctx->stack_ptr - fn->argcount;
-	  f->argcount = fn->argcount;
+	  //f->argcount = fn->argcount;
 	  rd[0] = (wasm_code_reader){.data = fn->code, .size = fn->length, .offset = 0};
 	  u32 l = reader_readu32(rd);
 	  for(u32 i = 0; i < l; i++){
@@ -1446,7 +1486,7 @@ int wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
 	rd = &f->rd;
 	f->retcount = fn->retcount;
 	f->stack_pos = ctx->stack_ptr - fn->argcount;
-	f->argcount = fn->argcount;
+	//f->argcount = fn->argcount;
 	rd[0] = (wasm_code_reader){.data = fn->code, .size = fn->length, .offset = 0};
 	u32 l = reader_readu32(rd);
 	for(u32 i = 0; i < l; i++){
@@ -1852,7 +1892,7 @@ int wasm_exec_code2(wasm_execution_context * ctx, int stepcount){
   return startcount - stepcount;
 }
 
-int wasm_exec_code3(wasm_execution_context * ctx, u8 * code, size_t l, u32 steps){
+void wasm_load_code(wasm_execution_stack * ctx, u8 * code, size_t l){
   ctx->frames = realloc(ctx->frames, sizeof(ctx->frames[0]));
   memset(ctx->frames, 0, sizeof(ctx->frames[0]));
   ctx->frame_capacity = 1;
@@ -1861,13 +1901,27 @@ int wasm_exec_code3(wasm_execution_context * ctx, u8 * code, size_t l, u32 steps
   f->rd.size = l;
   f->rd.data = code;
   ctx->frame_ptr = 0;
+}
+
+void wasm_fork_stack(wasm_execution_stack * ctx){
+  wasm_push_i32(ctx, 0);
+  ctx = mem_clone(ctx, sizeof(ctx[0]));
+  wasm_module_add_stack(ctx->module, ctx);
+  ctx->stack = mem_clone(ctx->stack, sizeof(ctx->stack[0]) * ctx->stack_capacity);
+  ctx->frames = mem_clone(ctx->frames, sizeof(ctx->frames[0]) * ctx->frame_capacity);
+  ctx->labels = mem_clone(ctx->labels, sizeof(ctx->labels[0]) * ctx->label_capacity);
+  wasm_push_i32(ctx, 1);
+}
+
+int wasm_exec_code3(wasm_execution_stack * ctx, u8 * code, size_t l, u32 steps){
+  wasm_load_code(ctx, code, l);
   return wasm_exec_code2(ctx, steps);
 }
 
 
 int main(int argc, char ** argv){
 
-  wasm_execution_context ctx ={0};
+  wasm_execution_stack ctx ={0};
   char * file = NULL;
   char * entrypoint = NULL;
   bool diagnostic = false;
@@ -1898,7 +1952,7 @@ int main(int argc, char ** argv){
   for(u32 i = 0; i < mod->func_count; i++){
     logd("  Func: %i '%s'\n", i, mod->func[i].name);
   }
-  ctx.module = mod;
+  wasm_module_add_stack(mod, &ctx);
   
   if(!test){
     int main_index = func_index(mod, entrypoint);
@@ -1908,9 +1962,26 @@ int main(int argc, char ** argv){
     }
     logd("Executing... %i\n", main_index);
     u8 code[] = {WASM_INSTR_I32_CONST, 0, WASM_INSTR_I32_CONST, 0, WASM_INSTR_CALL, (u8) main_index};
+    //wasm_execution_stack ctx2 ={0};
     
-    wasm_exec_code3(&ctx, code, sizeof(code), 2000000);
-  
+    wasm_load_code(&ctx, code, sizeof(code));
+
+    //wasm_execution_stack stk2 = {0};
+    //wasm_module_add_stack(mod, &stk2);
+    
+    //wasm_load_code(&stk2, code, sizeof(code));
+    
+    while(true){
+      bool any = false;
+      for(u32 i = 0; i < mod->stack_count; i++){
+	any |= wasm_exec_code2(mod->stacks[i], 1);
+      }
+      if(!any)
+	break;
+    }
+    
+    
+    
   }else{
     {
       logd("TEST CONST\n");

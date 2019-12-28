@@ -1,3 +1,16 @@
+
+int awsm_fork(){
+
+}
+
+void awsm_yield(){
+
+}
+
+void awsm_go(void (* f)(void * data), void * data){
+
+}
+
 int print_str(const char * x){
   return 0;
 }

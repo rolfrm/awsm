@@ -2,8 +2,9 @@ int print_str(const char * x);
 void print_i32(int x);
 void print_f32(float x);
 void print_f64(double x);
-
+int awsm_fork();
 int fib(int n){
+  //print_i32(n);
   if(n <2)
     return 1;
   return fib(n - 1) + fib(n - 2);
@@ -28,7 +29,7 @@ int main(){
   print_str("!!!!! ");
   print_f64(1.0);
   print_str("\n");*/
-
+  float x = 0;
   for(float y = 0.2; y < 5; y*=2){
     x += y + y2;
     y2 = y2 + 0.01;
@@ -40,7 +41,17 @@ int main(){
   
   print_f32(x);
   print_str("\n");
-  print_i32(fib(10));
+
+  if(awsm_fork()){
+    awsm_fork();
+    awsm_fork();
+    print_str("I am forked\n");
+    
+  }else{
+    print_str("I am not forked\n");
+  }
+
+  print_i32(fib(15));
   print_str("\n");
 
   /*while(1){
