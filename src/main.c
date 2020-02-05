@@ -1280,7 +1280,7 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
 	}
 	wasm_function * fn = mod->func + fcn;
 	if(fn->import){
-	  logd("CALL BUILTIN %i\n", fcn);
+	  logd("CALL BUILTIN %i %s\n", fcn, fn->name);
 	  if(fn->builtin == WASM_BUILTIN_UNRESOLVED){
 	    bool nameis(const char * x){
 	      return strcmp(x, fn->name) == 0;
@@ -1399,7 +1399,7 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
 	    break;
 	  case WASM_BUILTIN_SBRK:
 	    { // malloc support
-	      ERROR("SBRK");
+	      ERROR("SBRK Not supported!");
 	      i32 v;
 	      wasm_pop_i32(ctx, &v);
 	      logd("SBRK(%i)\n",v);
@@ -1427,6 +1427,8 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
 	  case WASM_BUILTIN_FORK:
 	    {
 	      wasm_fork_stack(ctx);
+	      
+	      
 	    }
 	    break;
 	  default:
@@ -1522,7 +1524,9 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
 	wasm_pop_u64(ctx, &s);
 	wasm_pop_u64(ctx, &y);
 	wasm_pop_u64(ctx, &x);
+
 	u64 result = (s != 0) ? x : y;
+	logd("SELECT %i %i %p: %i\n", x, y, s, result);
 	wasm_push_u64(ctx, result);
       }
       break;
@@ -1885,7 +1889,7 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
       break;
     
     default:
-      ERROR("Cannot execute opcode %x\n", instr);
+      ERROR("Unknown opcode %x\n", instr);
       break;
     }
   }
@@ -1903,14 +1907,17 @@ void wasm_load_code(wasm_execution_stack * ctx, u8 * code, size_t l){
   ctx->frame_ptr = 0;
 }
 
-void wasm_fork_stack(wasm_execution_stack * ctx){
-  wasm_push_i32(ctx, 0);
-  ctx = mem_clone(ctx, sizeof(ctx[0]));
+void wasm_fork_stack(wasm_execution_stack * init_ctx){
+
+  wasm_execution_stack * ctx = mem_clone(init_ctx, sizeof(ctx[0]));
   wasm_module_add_stack(ctx->module, ctx);
   ctx->stack = mem_clone(ctx->stack, sizeof(ctx->stack[0]) * ctx->stack_capacity);
   ctx->frames = mem_clone(ctx->frames, sizeof(ctx->frames[0]) * ctx->frame_capacity);
   ctx->labels = mem_clone(ctx->labels, sizeof(ctx->labels[0]) * ctx->label_capacity);
+
   wasm_push_i32(ctx, 1);
+  wasm_push_i32(init_ctx, 0);  
+
 }
 
 int wasm_exec_code3(wasm_execution_stack * ctx, u8 * code, size_t l, u32 steps){
@@ -1970,7 +1977,7 @@ int main(int argc, char ** argv){
     //wasm_module_add_stack(mod, &stk2);
     
     //wasm_load_code(&stk2, code, sizeof(code));
-    
+     
     while(true){
       bool any = false;
       for(u32 i = 0; i < mod->stack_count; i++){

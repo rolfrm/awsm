@@ -1,3 +1,6 @@
+//compile with clang: clang-9 --target=wasm32 -nostdlib -Wl,--export-all -Wl,--no-entry -O3 -Wl,-no-gc-sections testlib2.c -Wl,--allow-undefined  -o testlib3.wasm 
+
+
 int print_str(const char * x);
 void print_i32(int x);
 void print_f32(float x);
@@ -13,11 +16,22 @@ void inscribe(char * x){
   x[0] = 'a';
   x[1] = '\n';
 }
-extern float x, y2;
+float x, y2;
 void incr_y(){
   y2 += 0.1;
   print_f32(y2);
 }
+
+void test_fork(){
+  //int forkid = awsm_fork();
+  //print_i32(forkid);
+  if(awsm_fork()){
+   print_str("fork\n");
+ }else{
+   print_str("other fork\n");
+ }
+}
+
 int main(){
 
   /*char  a[10];
@@ -41,12 +55,19 @@ int main(){
   
   print_f32(x);
   print_str("\n");
-
+  print_str("pre fork:");
+  print_i32(fib(15));
+  print_str("\n");
+  print_i32(fib(15));
+  print_str("\n");
+  print_i32(fib(15));
+  print_str("\n");
+  
   if(awsm_fork()){
     awsm_fork();
-    awsm_fork();
+    //print_i32(fib(15));
     print_str("I am forked\n");
-    
+
   }else{
     print_str("I am not forked\n");
   }
@@ -59,4 +80,8 @@ int main(){
     }*/
 
   return 5;
+}
+
+void _start(){
+
 }
