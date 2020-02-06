@@ -852,7 +852,8 @@ static void wasm_stack_drop(wasm_execution_stack * ctx){
 static void * wasm_stack_next(wasm_execution_stack * ctx){
   ctx->stack_ptr += 1;
   if(ctx->stack_ptr > ctx->stack_capacity){
-    ctx->stack = realloc(ctx->stack, sizeof(ctx->stack[0]) * (ctx->stack_capacity = (ctx->stack_capacity + 1) * 2));
+    // ok to be a bit conservative wrt stack growing.
+    ctx->stack = realloc(ctx->stack, sizeof(ctx->stack[0]) * (ctx->stack_capacity = (ctx->stack_ptr + 1) * 1.5));
     logd("increasing stack capacity to %i\n", ctx->stack_capacity);
   }
 
@@ -1092,6 +1093,12 @@ bool pop_label(wasm_execution_stack * ctx, bool move){
   return false;
 }
 
+void print_label(wasm_execution_stack * ctx, int arity){
+  wasm_control_stack_frame * f = ctx->frames + ctx->frame_ptr;
+  wasm_label * label = ctx->labels + f->block + f->label_offset - (1 + arity);
+  printf("label: %i offset: %i cap: %i\n", label->offset, f->block + f->label_offset - (1 + arity), ctx->label_capacity);
+}
+
 void pop_label2(wasm_execution_stack * ctx, int arity){
   wasm_control_stack_frame * f = ctx->frames + ctx->frame_ptr;
   wasm_label * label = ctx->labels + f->block + f->label_offset - (1 + arity);
@@ -1114,7 +1121,7 @@ void push_label(wasm_execution_stack * ctx, u8 blktype, bool forward){
   f->block += 1;
   int c = f->block + f->label_offset - ctx->label_capacity;
   if(c > 0){
-    ctx->labels = realloc(ctx->labels, (ctx->label_capacity + c) * sizeof(ctx->labels[0]));
+    ctx->labels = realloc(ctx->labels, (ctx->label_capacity = ctx->label_capacity + c) * sizeof(ctx->labels[0]));
   }
   wasm_label * label = ctx->labels + f->label_offset + f->block - 1;
   label->type = blktype;
@@ -1906,17 +1913,17 @@ void wasm_load_code(wasm_execution_stack * ctx, u8 * code, size_t l){
   f->rd.data = code;
   ctx->frame_ptr = 0;
 }
-
+void print_label(wasm_execution_stack * ctx, int arity);
 void wasm_fork_stack(wasm_execution_stack * init_ctx){
 
   wasm_execution_stack * ctx = mem_clone(init_ctx, sizeof(ctx[0]));
+  ctx->stack_capacity = ctx->stack_ptr;
   wasm_module_add_stack(ctx->module, ctx);
   ctx->stack = mem_clone(ctx->stack, sizeof(ctx->stack[0]) * ctx->stack_capacity);
   ctx->frames = mem_clone(ctx->frames, sizeof(ctx->frames[0]) * ctx->frame_capacity);
   ctx->labels = mem_clone(ctx->labels, sizeof(ctx->labels[0]) * ctx->label_capacity);
-
   wasm_push_i32(ctx, 1);
-  wasm_push_i32(init_ctx, 0);  
+  wasm_push_i32(init_ctx, 0);
 
 }
 
@@ -1981,7 +1988,7 @@ int main(int argc, char ** argv){
     while(true){
       bool any = false;
       for(u32 i = 0; i < mod->stack_count; i++){
-	any |= wasm_exec_code2(mod->stacks[i], 1);
+	any |= wasm_exec_code2(mod->stacks[i], 10);
       }
       if(!any)
 	break;

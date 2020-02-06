@@ -65,19 +65,15 @@ int main(){
   
   if(awsm_fork()){
     awsm_fork();
-    //print_i32(fib(15));
-    print_str("I am forked\n");
+    print_i32(fib(15));
+    print_str("\nI am forked\n");
 
   }else{
     print_str("I am not forked\n");
   }
 
   print_i32(fib(15));
-  print_str("\n");
-
-  /*while(1){
-    a[0] += 1;
-    }*/
+  print_str("calc!\n");
 
   return 5;
 }
