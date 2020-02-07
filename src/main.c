@@ -8,6 +8,7 @@
 #include <signal.h>
 #include <dlfcn.h>
 #include "wasm_instr.h"
+
 typedef int32_t i32;
 typedef int64_t i64;
 
@@ -127,22 +128,10 @@ typedef enum WASM_IMPORT_TYPE{
   WASM_IMPORT_GLOBAL =3
 }wasm_import_type;
 
-typedef enum WASM_BUILTIN_FCN{
-  WASM_BUILTIN_UNRESOLVED = 0,
-  WASM_BUILTIN_REQUIRE_I32,
-  WASM_BUILTIN_REQUIRE_I64,
-  WASM_BUILTIN_REQUIRE_F32,
-  WASM_BUILTIN_REQUIRE_F64,
-  WASM_BUILTIN_PRINT_I32,
-  WASM_BUILTIN_PRINT_I64,
-  WASM_BUILTIN_PRINT_STR,
-  WASM_BUILTIN_PRINT_F32,
-  WASM_BUILTIN_SBRK,
-  WASM_BUILTIN_GET_SYMBOL,
-  WASM_BUILTIN_GO,
-  WASM_BUILTIN_YIELD,
-  WASM_BUILTIN_FORK
-}wasm_builtin_fcn;
+
+typedef enum WASM_FUNCTION_TYPE{
+  WASM_FUNCTION_TYPE_IMPORT = 2,
+}wasm_function_type;
 
 typedef struct{
   void * code;
@@ -152,8 +141,7 @@ typedef struct{
   int type;
   u32 argcount;
   u32 retcount;
-  bool import;
-  wasm_builtin_fcn builtin;
+  wasm_function_type functype;
 }wasm_function;
 
 typedef struct{
@@ -499,7 +487,7 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
 	      module.import_func_count += 1;
 
 	      f->name = name;
-	      f->import = true;
+	      f->functype = WASM_FUNCTION_TYPE_IMPORT;
 	      f->type = typeindex;
 	      f->module = modulename;
 	      break;
@@ -784,25 +772,8 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
        }  
     }
   }
-  for(u32 i = 0; i < module.func_count; i++){
-    logd("  Func: %i '%s'\n", i, module.func[i].name);
-    if(module.func[i].name == NULL) continue;
-    if(strcmp(module.func[i].name, "print_str") == 0
-       || (strcmp(module.func[i].name, "print_i32") == 0)
-       || (strcmp(module.func[i].name, "print_f32") == 0)
-       || (strcmp(module.func[i].name, "awsm_go") == 0)
-       || (strcmp(module.func[i].name, "awsm_fork") == 0)
-       || (strcmp(module.func[i].name, "awsm_yield") == 0)
-       )
-      {
-      module.func[i].builtin = WASM_BUILTIN_UNRESOLVED;
-      module.func[i].import = true;
-    }
-  }
   
-  wasm_module * r = alloc0(sizeof(module));
-  *r = module;
-  return r;
+  return mem_clone(&module, sizeof(module));
 }
 
 typedef struct{
@@ -1141,7 +1112,6 @@ void return_from(wasm_execution_stack * ctx){
 }
 
 bool push_stack_frame(wasm_execution_stack * ctx){
-  logd("PUSH STACK FRAME ->%i\n", ctx->frame_ptr + 1);
   bool changed;
   if(ctx->frame_ptr + 1 >= ctx->frame_capacity){
     ctx->frames = realloc(ctx->frames, sizeof(ctx->frames[0]) * (ctx->frame_capacity += 1));
@@ -1286,162 +1256,9 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
 	  ERROR("Unknown function %i\n", fcn);
 	}
 	wasm_function * fn = mod->func + fcn;
-	if(fn->import){
-	  logd("CALL BUILTIN %i %s\n", fcn, fn->name);
-	  if(fn->builtin == WASM_BUILTIN_UNRESOLVED){
-	    bool nameis(const char * x){
-	      return strcmp(x, fn->name) == 0;
-	    }
-	    if(nameis("print_i32")){
-	      fn->builtin = WASM_BUILTIN_PRINT_I32;
-	    }else if(nameis("print_i64")){
-	      fn->builtin = WASM_BUILTIN_PRINT_I64;
-	    }else if(nameis("print_f32")){
-	      fn->builtin = WASM_BUILTIN_PRINT_F32;
-	    }else if(nameis("print_str")){
-	      fn->builtin = WASM_BUILTIN_PRINT_STR;
-	    }else if(nameis("require_i32")){
-	      fn->builtin = WASM_BUILTIN_REQUIRE_I32;
-	    }else if(nameis("require_i64")){
-	      fn->builtin = WASM_BUILTIN_REQUIRE_I64;
-	    }else if(nameis("require_f32")){
-	      fn->builtin = WASM_BUILTIN_REQUIRE_F32;
-	    }else if(nameis("require_f64")){
-	      fn->builtin = WASM_BUILTIN_REQUIRE_F64;
-	    }else if(nameis("sbrk")){
-	      fn->builtin = WASM_BUILTIN_SBRK;
-	    }else if(nameis("get_symbol")){
-	      fn->builtin = WASM_BUILTIN_GET_SYMBOL;
-	    }else if(nameis("awsm_go")){
-	      fn->builtin = WASM_BUILTIN_GO;
-	    }else if(nameis("awsm_fork")){
-	      fn->builtin = WASM_BUILTIN_FORK;
-	    }else if(nameis("awsm_yield")){
-	      fn->builtin = WASM_BUILTIN_YIELD;
-	    }
-	    else{
-	      ERROR("Unknown import: %s\n", fn->name);
-	    }
-	  }
-
-	  // weird stuff:
-	  // apparantly when calling external methods, emcc thinks its a 32 bit stack
-	  // so 64bit values are in chunks of 32 bit.
-	  
-	  switch(fn->builtin){
-	  case WASM_BUILTIN_REQUIRE_I32:
-	    {
-	      i32 a, b;
-	      wasm_pop_i32(ctx, &a);
-	      wasm_pop_i32(ctx, &b);
-	      log("REQUIRE I32 %i == %i\n", b, a);
-	      if(a != b){
-		ERROR("Require: does not match\n");
-	      }
-	    }
-	    break;
-	  case WASM_BUILTIN_REQUIRE_I64:
-	    {
-	      i64 a, b;
-	      wasm_pop_i64(ctx, &a);
-	      wasm_pop_i64(ctx, &b);
-	      log("REQUIRE I64 %i == %i\n", b, a);
-	      if(a != b){
-		ERROR("Require: does not match\n");
-	      }
-	    }
-	    break;
-	  case WASM_BUILTIN_REQUIRE_F32:
-	    {
-	      f32 a, b;
-	      wasm_pop_f32(ctx, &a);
-	      wasm_pop_f32(ctx, &b);
-	      log("REQUIRE f32 %f == %f\n", b, a, fabs(a - b) < 0.0001f);
-	      if(fabs(a - b) > 0.000001){
-		ERROR("Require: does not match\n");
-	      }
-	    }
-	    break;
-	  case WASM_BUILTIN_REQUIRE_F64:
-	    {
-	      f64 a, b;
-	      wasm_pop_f64(ctx, &a);
-	      wasm_pop_f64(ctx, &b);
-	      log("REQUIRE f64 %f == %f\n", b, a);
-	      if(a != b){
-		ERROR("Require: does not match\n");
-	      }
-	    }
-	    break;
-	  case WASM_BUILTIN_PRINT_I32:
-	    {
-	      i32 v;
-	      wasm_pop_i32(ctx, &v);
-	      log("%i", v);
-	    }
-	    break;
-	  case WASM_BUILTIN_PRINT_I64:
-	    {
-	      i64 v;
-	      wasm_pop_i64(ctx, &v);
-	      log("%i\n", v);
-	    }
-	    break;
-	  case WASM_BUILTIN_PRINT_STR:
-	    {
-	      i32 v;
-	      wasm_pop_i32(ctx, &v);
-	      char * str = (mod->heap->heap + v);
-	      v = printf("%s", str);
-	      wasm_push_i32(ctx, v);
-	    }
-	    break;
-	  case WASM_BUILTIN_PRINT_F32:
-	    {
-	      f32 v;
-	      wasm_pop_f32(ctx, &v);
-	      printf("%f", v);
-	      break;
-	    }
-	    break;
-	  case WASM_BUILTIN_SBRK:
-	    { // malloc support
-	      ERROR("SBRK Not supported!");
-	      i32 v;
-	      wasm_pop_i32(ctx, &v);
-	      logd("SBRK(%i)\n",v);
-	      wasm_push_u32(ctx,  mod->heap->capacity);
-	      if(v > 0)
-		mod->heap->heap = realloc(mod->heap->heap, mod->heap->capacity += v);
-	      break;
-	    }
-	  case WASM_BUILTIN_GET_SYMBOL:
-	    {
-	      u64 _module, _symbol, argcount, retcount;
-	      wasm_pop_u64(ctx, &retcount);
-	      wasm_pop_u64(ctx, &argcount);
-	      wasm_pop_u64(ctx, &_symbol);
-	      wasm_pop_u64(ctx, &_module);
-	      char * module = mod->heap->heap + _module;
-	      char * ep = mod->heap->heap + _symbol;
-	      void * dl = dlopen(module, RTLD_GLOBAL | RTLD_NOW);
-	      void * ep2 = dlsym(dl, ep);
-	      
-	      logd("GET SYMBOL '%s' %s, %p %p, %i %i %i\n", module,ep, dl, ep2, _symbol, argcount, retcount);
-	      wasm_push_u32(ctx, 0);
-	    }
-	    break;
-	  case WASM_BUILTIN_FORK:
-	    {
-	      wasm_fork_stack(ctx);
-	      
-	      
-	    }
-	    break;
-	  default:
-	    ERROR("UNKNOWN BUILTIN COMMAND\n");
-	  }
-	  
+	if(fn->functype == WASM_FUNCTION_TYPE_IMPORT){
+	  void (* fcn)(wasm_execution_stack * stack) = fn->code;
+	  fcn(ctx);
 	}else{
 
 	  logd("CALL %s (%i)\n",fn->name, fcn);
@@ -1489,7 +1306,7 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
 	fcn = mod->import_table[fcn];
 	wasm_function * fn = mod->func + fcn;
 	logd("CALL INDIRECT %s (%i)\n", fn->name, fcn);
-	if(fn->import) ERROR("Cannot indirectly call builtin\n");
+	if(fn->functype == WASM_FUNCTION_TYPE_IMPORT) ERROR("Cannot indirectly call builtin\n");
 	push_stack_frame(ctx);
 	f = ctx->frames + ctx->frame_ptr;
 	rd = &f->rd;
@@ -1924,7 +1741,6 @@ void wasm_fork_stack(wasm_execution_stack * init_ctx){
   ctx->labels = mem_clone(ctx->labels, sizeof(ctx->labels[0]) * ctx->label_capacity);
   wasm_push_i32(ctx, 1);
   wasm_push_i32(init_ctx, 0);
-
 }
 
 int wasm_exec_code3(wasm_execution_stack * ctx, u8 * code, size_t l, u32 steps){
@@ -1932,6 +1748,107 @@ int wasm_exec_code3(wasm_execution_stack * ctx, u8 * code, size_t l, u32 steps){
   return wasm_exec_code2(ctx, steps);
 }
 
+void awsm_register_function(wasm_module * module, void (* func)(wasm_execution_stack * stack), const char * name){
+  for(u32 i = 0; i < module->import_func_count; i++){
+    if(strcmp(module->func[i].name, name) == 0){
+      wasm_function * f = module->func + i;
+      f->functype = WASM_FUNCTION_TYPE_IMPORT;
+      f->code = func;
+      return;
+    }
+  }
+}
+
+typedef wasm_execution_stack stack;
+
+void _print_i32(stack * ctx){
+  i32 v;
+  wasm_pop_i32(ctx, &v);
+  log("%i", v);
+}
+
+void _print_i64(stack * ctx){
+  i64 v;
+  wasm_pop_i64(ctx, &v);
+  log("%i\n", v);
+}
+
+void _print_str(stack * ctx){
+  i32 v;
+  wasm_pop_i32(ctx, &v);
+  char * str = (ctx->module->heap->heap + v);
+  v = printf("%s", str);
+  wasm_push_i32(ctx, v);
+}
+
+void _print_f32(stack * ctx){
+  f32 v;
+  wasm_pop_f32(ctx, &v);
+  log("%f", v);
+}
+
+void _print_f64(stack * ctx){
+  f64 v;
+  wasm_pop_f64(ctx, &v);
+  log("%f", v);
+}
+
+void _require_f64(stack * ctx){
+  f64 a, b;
+  wasm_pop_f64(ctx, &a);
+  wasm_pop_f64(ctx, &b);
+  if(a != b) ERROR("Require: does not match\n");
+}
+
+void _require_f32(stack * ctx){
+  f32 a, b;
+  wasm_pop_f32(ctx, &a);
+  wasm_pop_f32(ctx, &b);
+  if(a != b) ERROR("Require: does not match\n");
+}
+
+void _require_i64(stack * ctx){
+  i64 a, b;
+  wasm_pop_i64(ctx, &a);
+  wasm_pop_i64(ctx, &b);
+  if(a != b)
+    ERROR("Require: does not match\n");
+}
+
+void _require_i32(stack * ctx){
+  i32 a, b;
+  wasm_pop_i32(ctx, &a);
+  wasm_pop_i32(ctx, &b);
+  if(a != b)
+    ERROR("Require: does not match\n");
+}
+
+void _get_symbol(stack * ctx){
+  wasm_module * mod = ctx->module;
+  u64 _module, _symbol, argcount, retcount;
+  wasm_pop_u64(ctx, &retcount);
+  wasm_pop_u64(ctx, &argcount);
+  wasm_pop_u64(ctx, &_symbol);
+  wasm_pop_u64(ctx, &_module);
+  char * module = mod->heap->heap + _module;
+  char * ep = mod->heap->heap + _symbol;
+  void * dl = dlopen(module, RTLD_GLOBAL | RTLD_NOW);
+  void * ep2 = dlsym(dl, ep);
+  
+  logd("GET SYMBOL '%s' %s, %p %p, %i %i %i\n", module,ep, dl, ep2, _symbol, argcount, retcount);
+  wasm_push_u32(ctx, 0);
+}
+
+void _sbrk(stack * ctx){
+  ERROR("SBRK Not supported!");
+  wasm_module * mod = ctx->module;
+  i32 v;
+  wasm_pop_i32(ctx, &v);
+  logd("SBRK(%i)\n",v);
+  wasm_push_u32(ctx,  mod->heap->capacity);
+  if(v > 0)
+    mod->heap->heap = realloc(mod->heap->heap, mod->heap->capacity += v);
+}
 
 int main(int argc, char ** argv){
 
@@ -1963,6 +1880,22 @@ int main(int argc, char ** argv){
   wasm_heap heap = {0};
   wasm_code_reader rd = {.data = data, .size = buffer_size, .offset = 0};
   wasm_module * mod = load_wasm_module(&heap, &rd);
+  awsm_register_function(mod, _print_i32, "print_i32");
+  awsm_register_function(mod, _print_i64, "print_i64");
+  awsm_register_function(mod, _print_str, "print_str");
+  awsm_register_function(mod, _print_f32, "print_f32");
+  awsm_register_function(mod, _print_f64, "print_f64");
+  awsm_register_function(mod, _require_f64, "require_f64");
+  awsm_register_function(mod, _require_f32, "require_f32");
+  awsm_register_function(mod, _require_i64, "require_i64");
+  awsm_register_function(mod, _require_i32, "require_i32");
+  awsm_register_function(mod, _get_symbol, "get_symbol");
+  awsm_register_function(mod, _sbrk, "sbrk");
+  awsm_register_function(mod, wasm_fork_stack, "awsm_fork");
+
+  
+
+  
   for(u32 i = 0; i < mod->func_count; i++){
     logd("  Func: %i '%s'\n", i, mod->func[i].name);
   }
