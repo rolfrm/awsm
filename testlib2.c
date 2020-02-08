@@ -56,6 +56,11 @@ void subthing(){
 }
 
 int main(){
+  print_str("Hello World!");
+  return 0;
+}
+
+int test_main(){
   vec2 v = vec2_new(1.0, -1.5);
   float x = 0;
   for(float y = 0.2; y < 5; y*=2){
