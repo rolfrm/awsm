@@ -5,8 +5,6 @@
 #include <stdbool.h>
 #include <math.h>
 #include <stdarg.h>
-#include <signal.h>
-#include <dlfcn.h>
 #include "wasm_instr.h"
 
 typedef int32_t i32;
@@ -23,26 +21,17 @@ typedef double f64;
 #define MIN(X,Y)(X < Y ? X : Y)
 #define SIGN(x) (x > 0 ? 1 : (x < 0 ? -1 : 0))
 
-static void _error(const char * file, int line, const char * msg, ...){
-  UNUSED(file);UNUSED(line);UNUSED(msg);
-  char buffer[1000];  
-  va_list arglist;
-  va_start (arglist, msg);
-  vsprintf(buffer,msg,arglist);
-  va_end(arglist);
-  printf("%s\n", buffer);
-  printf("Got error at %s line %i\n", file,line);
-  raise(SIGINT);
-  exit(10);
-  raise(SIGINT);
-}
+static void (*_error)(const char * file, int line, const char * msg, ...);
 
 #define log _log
-#define ERROR(msg,...) _error(__FILE__,__LINE__,msg, ##__VA_ARGS__)
+#define ERROR(msg,...) if(_error) _error(__FILE__,__LINE__,msg, ##__VA_ARGS__)
 #define ASSERT(expr) if(__builtin_expect(!(expr), 0)){ERROR("Assertion '" #expr "' Failed");}
 
-bool logd_enable = true;
+bool logd_enable = false;
+
 static void logd(const char * msg, ...){
+UNUSED(msg);
+#ifdef DEBUG
 
   if(logd_enable){
     va_list arglist;
@@ -50,6 +39,7 @@ static void logd(const char * msg, ...){
     vprintf(msg,arglist);
     va_end(arglist);
   }
+#endif
 }
 
 static void _log(const char * msg, ...){
@@ -101,6 +91,9 @@ static void * read_file_to_buffer(const char * filepath, size_t * size){
 }
 
 #define WASM_PAGE_SIZE 64000
+
+// This controls how many steps are executed in each fork context before switching.
+#define AWSM_DEFAULT_STEPS_PER_CONTEXT_SWITCH 20
 
 typedef enum WASM_SECTION{
   WASM_CUSTOM_SECTION = 0,
@@ -180,6 +173,11 @@ typedef struct{
 
   wasm_execution_stack ** stacks;
   u32 stack_count;
+
+  u64 steps_per_context_switch;
+  u64 steps_executed;
+
+  u64 current_stack;
 }wasm_module;
 
 void wasm_fork_stack(wasm_execution_stack * ctx);
@@ -409,6 +407,7 @@ static wasm_instr move_to_end_of_block(wasm_code_reader * rd, u32 block){
 // Load a WASM module from bytes
 wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
   wasm_module module = {0};
+  module.steps_per_context_switch = AWSM_DEFAULT_STEPS_PER_CONTEXT_SWITCH;
   module.heap = heap;
   ASSERT(rd->size > 8);
    
@@ -1278,6 +1277,7 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
 	}
 	wasm_function * fn = mod->func + fcn;
 	if(fn->functype == WASM_FUNCTION_TYPE_IMPORT){
+	  logd("CALLf %s (%i)\n",fn->name, fcn);
 	  void (* fcn)(wasm_execution_stack * stack) = fn->code;
 	  fcn(ctx);
 	}else{
@@ -1805,8 +1805,8 @@ void _print_str(stack * ctx){
   i32 v;
   wasm_pop_i32(ctx, &v);
   char * str = (ctx->module->heap->heap + v);
-  v = printf("%s", str);
-  wasm_push_i32(ctx, v);
+  i32 v2 = printf("%s", str);
+  wasm_push_i32(ctx, v2);
 }
 
 void _print_f32(stack * ctx){
@@ -1851,21 +1851,6 @@ void _require_i32(stack * ctx){
     ERROR("Require: does not match\n");
 }
 
-void _get_symbol(stack * ctx){
-  wasm_module * mod = ctx->module;
-  u64 _module, _symbol, argcount, retcount;
-  wasm_pop_u64(ctx, &retcount);
-  wasm_pop_u64(ctx, &argcount);
-  wasm_pop_u64(ctx, &_symbol);
-  wasm_pop_u64(ctx, &_module);
-  char * module = mod->heap->heap + _module;
-  char * ep = mod->heap->heap + _symbol;
-  void * dl = dlopen(module, RTLD_GLOBAL | RTLD_NOW);
-  void * ep2 = dlsym(dl, ep);
-  
-  logd("GET SYMBOL '%s' %s, %p %p, %i %i %i\n", module,ep, dl, ep2, _symbol, argcount, retcount);
-  wasm_push_u32(ctx, 0);
-}
 
 void _sbrk(stack * ctx){
   ERROR("SBRK Not supported!");
@@ -1877,6 +1862,58 @@ void _sbrk(stack * ctx){
   if(v > 0)
     mod->heap->heap = realloc(mod->heap->heap, mod->heap->capacity += v);
 }
+
+wasm_module * awsm_load_module_from_file(const char * wasm_file){
+  size_t buffer_size = 0;
+  void * data = read_file_to_buffer(wasm_file, &buffer_size);
+  if(data == NULL){
+    ERROR("awsm error: Cannot load file: %s", wasm_file);
+    return NULL;
+  }
+  wasm_heap * heap = alloc0(sizeof(heap[0]));
+  wasm_code_reader rd = {.data = data, .size = buffer_size, .offset = 0};
+  wasm_module * mod = load_wasm_module(heap, &rd);
+  awsm_register_function(mod, _print_i32, "print_i32");
+  awsm_register_function(mod, _print_i64, "print_i64");
+  awsm_register_function(mod, _print_str, "print_str");
+  awsm_register_function(mod, _print_f32, "print_f32");
+  awsm_register_function(mod, _print_f64, "print_f64");
+  awsm_register_function(mod, _require_f64, "require_f64");
+  awsm_register_function(mod, _require_f32, "require_f32");
+  awsm_register_function(mod, _require_i64, "require_i64");
+  awsm_register_function(mod, _require_i32, "require_i32");
+  awsm_register_function(mod, _sbrk, "sbrk");
+  awsm_register_function(mod, wasm_fork_stack, "awsm_fork");
+  return mod;
+}
+
+
+bool awsm_process(wasm_module * module, u64 steps_total){
+  
+  u64 steps_target = steps_total + module->steps_executed;
+  
+  u64 group = module->steps_per_context_switch;
+
+  while(module->steps_executed < steps_target){
+    u64 i = module->current_stack;
+    while(module->stacks[i] == NULL){
+      i++;
+      if(i >= module->stack_count) i = 0;
+      if(i == module->current_stack)
+	return false;
+    }
+    module->current_stack = i;
+    wasm_exec_code2(module->stacks[i], group);    
+    module->steps_executed += group;
+    if(wasm_stack_is_finalized(module->stacks[i])){
+      wasm_delete_stack(module->stacks[i]);
+    }
+    module->current_stack += 1;
+    if(module->current_stack >= module->stack_count) module->current_stack = 0;
+  }
+  return true;
+}
+
 
 int main(int argc, char ** argv){
 
@@ -1903,30 +1940,7 @@ int main(int argc, char ** argv){
     goto print_help;
 
   logd_enable = diagnostic;
-  size_t buffer_size = 0;
-  void * data = read_file_to_buffer(file, &buffer_size);
-  wasm_heap heap = {0};
-  wasm_code_reader rd = {.data = data, .size = buffer_size, .offset = 0};
-  wasm_module * mod = load_wasm_module(&heap, &rd);
-  awsm_register_function(mod, _print_i32, "print_i32");
-  awsm_register_function(mod, _print_i64, "print_i64");
-  awsm_register_function(mod, _print_str, "print_str");
-  awsm_register_function(mod, _print_f32, "print_f32");
-  awsm_register_function(mod, _print_f64, "print_f64");
-  awsm_register_function(mod, _require_f64, "require_f64");
-  awsm_register_function(mod, _require_f32, "require_f32");
-  awsm_register_function(mod, _require_i64, "require_i64");
-  awsm_register_function(mod, _require_i32, "require_i32");
-  awsm_register_function(mod, _get_symbol, "get_symbol");
-  awsm_register_function(mod, _sbrk, "sbrk");
-  awsm_register_function(mod, wasm_fork_stack, "awsm_fork");
-
-  
-
-  
-  for(u32 i = 0; i < mod->func_count; i++){
-    logd("  Func: %i '%s'\n", i, mod->func[i].name);
-  }
+  wasm_module * mod = awsm_load_module_from_file(file);
   wasm_module_add_stack(mod, ctx);
   
   if(!test){
@@ -1940,16 +1954,8 @@ int main(int argc, char ** argv){
     
     wasm_load_code(ctx, code, sizeof(code));
 
-    while(true){
-      bool any = false;
-      for(u32 i = 0; i < mod->stack_count; i++){
-	if(mod->stacks[i] == NULL) continue;
-	any |= wasm_exec_code2(mod->stacks[i], 10);
-	if(wasm_stack_is_finalized(mod->stacks[i]))
-	  wasm_delete_stack(mod->stacks[i]);
-      }
-      if(!any)
-	break;
+    while(awsm_process(mod, mod->steps_per_context_switch * 20)){
+      //printf("context switch\n");
     }
     
   }else{

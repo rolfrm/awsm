@@ -1,4 +1,4 @@
-OPT = -g3 -O0
+OPT = -g0 -O3
 LIB_SOURCES1 = awsm.c
 LIB_SOURCES = $(addprefix src/, $(LIB_SOURCES1))
 
@@ -6,7 +6,7 @@ CC = gcc
 TARGET = awsm
 LIB_OBJECTS =$(LIB_SOURCES:.c=.o)
 LDFLAGS= -L. $(OPT) -Wall -Wextra
-LIBS= -lm -ldl
+LIBS= -lm
 ALL= $(TARGET)
 CFLAGS = -Isrc/ -Iinclude/ -std=gnu11 -c $(OPT) -Wall  -Wextra -Werror=implicit-function-declaration -Wformat=0 -D_GNU_SOURCE -Wwrite-strings -Werror -Werror=maybe-uninitialized #-fprofile-use=profile.out -v -fprofile-generate=./profile.out   #
 

@@ -52,7 +52,7 @@ void vec2_print(vec2 v){
 
 void subthing(){
   print_i32(fib(15));
-  print_str("calc!\n");
+  print_str("\ncalc!\n");
 }
 
 int main(){
@@ -74,9 +74,24 @@ int main(){
 }
 
 void main_forked(){
-  awsm_fork();
-  awsm_fork();
-  main();
+  if(awsm_fork()){
+    awsm_fork();
+    main();
+  }else{
+    print_i32(fib(17));
+    print_str("\n");
+    if(awsm_fork()){
+      main();
+    }else{
+      print_str("main ends\n");
+    }
+  }
+  
+}
+
+void test_print(){
+  print_str("test?\n");
+
 }
 
 void test_load_symbol(){
