@@ -1,6 +1,60 @@
+#include <iron/full.h>
+#include <awsm.h>
+
+
+static u64 reader_readu64(u8 * buf){
+  // read LEB128
+  u8 chunk = 0;
+  u64 value = 0;
+  u64 offset = 0;
+  while((chunk = *buf) > 0){
+    value |= (0b01111111L & chunk) << offset;
+    offset += 7;
+    if((u64)(0b10000000L & chunk) == false)
+      break;
+    buf += 1;
+  }
+  return value;
+}
+
+static void encode_u64_leb(u64 value, u8 * buffer){
+  while(true){
+    
+    *buffer = value & 0b01111111L;
+    value >>= 7;
+    if(value)
+      *buffer |= 0b10000000L;
+    else break;
+    buffer += 1;
+  }
+}
+
+bool test_value(u64 value){
+  u8 buffer[16] = {0};
+  encode_u64_leb(value, buffer);
+  u64 result = reader_readu64(buffer);
+  printf("%p == %p\n", result, value);
+  if(result != value){
+    printf("%p == %p\n", result, value);
+    return false;
+  }
+  return true;
+
+}
+
 
 int main(int argc, char ** argv){
+  UNUSED(argc);
+  UNUSED(argv);
 
+  for(u64 i = 0 ;i < 64; i++){
+    printf(":%i\n", i);
+    if(!test_value((u64)1 << i | i << (i / 2)))
+      return 1;
+  }
+  
+  return 0;
+  /*
   wasm_execution_stack * ctx = alloc0(sizeof(ctx[0]));
   char * file = NULL;
   char * entrypoint = NULL;
@@ -146,5 +200,6 @@ if(false){
 
  print_help:
   printf("Usage: awsm [file] [entrypoint] [--diagnostic] \n");
-  return 1;
+  return 1;*/
+
 }

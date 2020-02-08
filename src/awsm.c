@@ -6,6 +6,7 @@
 #include <math.h>
 #include <stdarg.h>
 #include "wasm_instr.h"
+#include "awsm.h"
 
 typedef int32_t i32;
 typedef int64_t i64;
@@ -27,13 +28,13 @@ static void (*_error)(const char * file, int line, const char * msg, ...);
 #define ERROR(msg,...) if(_error) _error(__FILE__,__LINE__,msg, ##__VA_ARGS__)
 #define ASSERT(expr) if(__builtin_expect(!(expr), 0)){ERROR("Assertion '" #expr "' Failed");}
 
-bool logd_enable = false;
+bool awsm_log_diagnostic = false;
 
 static void logd(const char * msg, ...){
 UNUSED(msg);
 #ifdef DEBUG
 
-  if(logd_enable){
+  if(awsm_log_diagnostic){
     va_list arglist;
     va_start (arglist, msg);
     vprintf(msg,arglist);
@@ -68,7 +69,6 @@ static void * mem_clone(void * ptr, size_t s){
   memcpy(new, ptr, s);
   return new;
 }
-
 
 static void * read_stream_to_buffer(FILE * f, size_t * size){
   if(f == NULL)
@@ -151,9 +151,8 @@ typedef struct{
   size_t capacity;
 }wasm_heap;
 
-typedef struct _wasm_execution_stack wasm_execution_stack;
 
-typedef struct{
+struct _wasm_module{
   wasm_function * func;
   size_t func_count;
   size_t import_func_count;
@@ -178,7 +177,7 @@ typedef struct{
   u64 steps_executed;
 
   u64 current_stack;
-}wasm_module;
+};
 
 void wasm_fork_stack(wasm_execution_stack * ctx);
 
@@ -275,14 +274,25 @@ static u64 reader_readu64(wasm_code_reader * rd){
   u64 value = 0;
   u32 offset = 0;
   while((chunk = reader_read1(rd)) > 0){
-    value |= (0b01111111 & chunk) << offset;
+    value |= (0b01111111L & chunk) << offset;
     offset += 7;
-    if((0b10000000 & chunk) == false)
+    if((0b10000000L & chunk) == false)
       break;
   }
   return value;
 }
-  
+
+static void encode_u64_leb(u64 value, u8 * buffer){
+  while(value > 0){
+    
+    *buffer = value & 0b01111111L;
+    value <<= 7;
+    if(value)
+      *buffer |= 0b10000000L;
+    buffer += 1;
+  }
+}
+
 static u32 reader_readu32(wasm_code_reader * rd){
   return reader_readu64(rd);
 }
@@ -1142,11 +1152,11 @@ static bool push_stack_frame(wasm_execution_stack * ctx){
   return changed;
 }
 
-static int func_index(wasm_module * mod, const char * name){
+static i64 func_index(wasm_module * mod, const char * name){
   if(name == NULL) return -1;
-  for(u32 i = 0; i < mod->func_count; i++){
+  for(u64 i = 0; i < mod->func_count; i++){
     if(mod->func[i].name != NULL && strcmp(name, mod->func[i].name) == 0){
-      return i;
+      return (i64)i;
     }
   }
   return -1;
@@ -1918,46 +1928,79 @@ bool awsm_process(wasm_module * module, u64 steps_total){
   return true;
 }
 
-bool awsm_load_thread(wasm_module * module, const char * func){
-  wasm_execution_stack * ctx = alloc0(sizeof(ctx[0]));
+stack * awsm_load_thread(wasm_module * module, const char * func){
+  stack * ctx = alloc0(sizeof(ctx[0]));
   wasm_module_add_stack(module, ctx);
-  int main_index = func_index(module, func);
+  i64 main_index = func_index(module, func);
   if(main_index == -1){
     log("Unable to lookup function '%s'\n", func);
-    return false;
-    }
+    return NULL;
+  }
   logd("Load... %i\n", main_index);
-  u8 code[] = {WASM_INSTR_I32_CONST, 0, WASM_INSTR_I32_CONST, 0, WASM_INSTR_CALL, (u8) main_index};
+
+  u8 code[] = {WASM_INSTR_CALL, (u8) main_index, 0, 0, 0 ,0 ,0 ,0, 0 ,0 };
+  encode_u64_leb((u64)main_index, code + 2);
   ctx->initializer = mem_clone(code, sizeof(code));
   wasm_load_code(ctx, ctx->initializer, sizeof(code));
-  return true;
+  return ctx;
 }
 
-int main(int argc, char ** argv){
+void awsm_push_i32(stack * s, int32_t v){
+  wasm_push_i32(s, v);
+}
 
-  char * file = NULL;
-  char * entrypoint = NULL;
-  bool diagnostic = false;
-  for(int i = 1; i < argc; i++){
-    if(strcmp(argv[i], "--diagnostic") == 0){
-      diagnostic = true;
-      continue;
-    }
-    if(file == NULL)
-      file = argv[i];
-    else if(entrypoint == NULL)
-      entrypoint = argv[i];
-  }
-  
-  logd_enable = diagnostic;
-  wasm_module * mod = awsm_load_module_from_file(file);
+void awsm_push_i64(stack * s, int64_t v){
+  wasm_push_i64(s, v);
+}
 
-  if(awsm_load_thread(mod, entrypoint) == false){
-    ERROR("Unable to load thread");
-    return 1;
-  }
-  
-  while(awsm_process(mod, mod->steps_per_context_switch * 20)){
-  }
-  return 0;
+void awsm_push_u32(stack * s, uint32_t v){
+  wasm_push_u32(s, v);
+}
+
+void awsm_push_u64(stack * s, uint64_t v){
+  wasm_push_u64(s, v);
+}
+
+void awsm_push_f32(stack * s, float v){
+  wasm_push_f32(s, v);
+}
+
+void awsm_push_f64(stack * s, double v){
+  wasm_push_f64(s, v);
+}
+
+int32_t awsm_pop_i32(stack * s){
+  int32_t v;
+  wasm_pop_i32(s, &v);
+  return v;  
+}
+int64_t awsm_pop_i64(stack * s){
+  int64_t v;
+  wasm_pop_i64(s, &v);
+  return v;  
+}
+uint32_t awsm_pop_u32(stack * s){
+  uint32_t v;
+  wasm_pop_u32(s, &v);
+  return v;  
+}
+uint64_t awsm_pop_u64(stack * s){
+  uint64_t v;
+  wasm_pop_u64(s, &v);
+  return v;  
+}
+float awsm_pop_f32(stack * s){
+  float v;
+  wasm_pop_f32(s, &v);
+  return v;  
+}
+
+double awsm_pop_f64(stack * s){
+  double v;
+  wasm_pop_f64(s, &v);
+  return v;  
+}
+
+void * awsm_pop_ptr(stack * s){
+  return s->module->heap->heap + awsm_pop_u32(s);
 }
