@@ -6,6 +6,7 @@ int print_str(const char * x);
 void print_i32(int x);
 void print_f32(float x);
 //void print_f64(double x);
+void require_i32(int x, int y);
 int awsm_fork();
 int fib(int n){
   //print_i32(n);
@@ -49,17 +50,13 @@ void vec2_print(vec2 v){
   print_str(")"); 
 }
 
+void subthing(){
+  print_i32(fib(15));
+  print_str("calc!\n");
+}
+
 int main(){
   vec2 v = vec2_new(1.0, -1.5);
-  /*char  a[10];
-  inscribe(a);
-  print_str(a);
-  print_str("!!! ");
-  print_i32(fib(10));
-  print_str("\n");
-  print_str("!!!!! ");
-  print_f64(1.0);
-  print_str("\n");*/
   float x = 0;
   for(float y = 0.2; y < 5; y*=2){
     x += y + y2;
@@ -70,33 +67,17 @@ int main(){
   print_f32(x);
   print_str("\n");
   
-  print_f32(x);
-  print_str("\n");
-  print_str("pre fork:");
-  print_i32(fib(15));
-  print_str("\n");
-  print_i32(fib(15));
-  print_str("\n");
-  print_i32(fib(15));
-  print_str("\n");
+  subthing();
   
-  if(awsm_fork()){
-    awsm_fork();
-    print_i32(fib(15));
-    print_str("\nI am forked\n");
-
-  }else{
-    print_str("I am not forked\n");
-  }
-
-  print_i32(fib(15));
-  print_str("calc!\n");
-
-  vec2_print(v);
-  print_str("\n");
+  require_i32(987, fib(15));
   return 5;
 }
 
+void main_forked(){
+  awsm_fork();
+  awsm_fork();
+  main();
+}
 
 void test_load_symbol(){
   get_symbol("libglfw.so", "glfwCreateWindow", 4, 1);
