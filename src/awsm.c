@@ -826,19 +826,24 @@ struct _wasm_execution_stack{
   wasm_module * module;
 
   u8 * initializer;
+  bool yield;
 };
 
 
 void wasm_module_add_stack(wasm_module * module, wasm_execution_stack * stk){
+  stk->module = module;
   for(u32 i = 0; i < module->stack_count; i++){
     if(module->stacks[i] == NULL){
       module->stacks[i] = stk;
       return;
     }
   }
-  module->stacks = realloc(module->stacks, sizeof(module->stacks[0]) * (module->stack_count += 1));
+  module->stack_count += 1;
+  
+  module->stacks = realloc(module->stacks, sizeof(module->stacks[0]) * module->stack_count);
+
   module->stacks[module->stack_count - 1] = stk;
-  stk->module = module;
+
 }
 
 void wasm_module_remove_stack(wasm_module * module, wasm_execution_stack * ctx){
@@ -1181,6 +1186,7 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
   wasm_control_stack_frame * f = ctx->frames + ctx->frame_ptr;
   wasm_code_reader * rd = &f->rd;
   wasm_module * mod = ctx->module;
+  ASSERT(mod);
   while(rd->offset < rd->size && stepcount > 0){
     stepcount--;
     wasm_instr instr = reader_read1(rd);
@@ -1313,6 +1319,10 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
 	    ERROR("Unlinked symbol: %s\n", fn->name);
 	  }
 	  fcn(ctx);
+	  if(ctx->yield){
+	    ctx->yield = false;
+	    return startcount - stepcount;
+	  }
 	}else{
 
 	  logd("CALL %s (%i)\n",fn->name, fcn);
@@ -1862,24 +1872,25 @@ void _new_coroutine(stack * ctx){
   awsm_push_u64(ctx, 0);
 
   stack * ctx2 = alloc0(sizeof(ctx[0]));
+  wasm_module_add_stack(module, ctx2);
   awsm_push_u64(ctx, (u64) ctx2);
 
-  wasm_module_add_stack(module, ctx2);
-  
   i64 main_index = fcn;
   
   logd("Load... %i\n", main_index);
 
-  u8 * code = alloc0(32);
+  u8 * code = alloc0(16);
   code[0] = WASM_INSTR_CALL_INDIRECT;
-  u32 len = encode_u64_leb((u64)fcn, code + 1);
-  ctx2->initializer = mem_clone(code, len + 1);
+  //u32 len = encode_u64_leb((u64)fcn, code + 1);
+  ctx2->initializer = code;
 
   wasm_push_u64(ctx2, val);
   wasm_push_u64(ctx2, fcn);
-  wasm_load_code(ctx2, ctx2->initializer, len + 1);
-  
+  wasm_load_code(ctx2, ctx2->initializer, 3);
+}
 
+void _yield(stack * ctx){
+  ctx->yield = true;
 }
 
 wasm_module * awsm_load_module_from_file(const char * wasm_file){
@@ -1904,6 +1915,7 @@ wasm_module * awsm_load_module_from_file(const char * wasm_file){
   awsm_register_function(mod, _sbrk, "sbrk");
   awsm_register_function(mod, wasm_fork_stack, "awsm_fork");
   awsm_register_function(mod, _new_coroutine, "new_coroutine");
+  awsm_register_function(mod, _yield, "yield");
   return mod;
 }
 
@@ -1927,6 +1939,7 @@ bool awsm_process(wasm_module * module, u64 steps_total){
     module->steps_executed += group;
     if(wasm_stack_is_finalized(module->stacks[i])){
       wasm_delete_stack(module->stacks[i]);
+      module->stacks[i] = NULL;
     }
     module->current_stack += 1;
     if(module->current_stack >= module->stack_count) module->current_stack = 0;

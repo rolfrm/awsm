@@ -9,7 +9,7 @@ void print_f32(float x);
 void require_i32(int x, int y);
 int awsm_fork();
 unsigned long long new_coroutine(void (* f)(void * arg), void * arg);
-
+void yield();
 int fib(int n){
   //print_i32(n);
   if(n <2)
@@ -107,17 +107,21 @@ void test_load_symbol(){
 
 void test_load_symbol1(void * arg){
   test_print();
-  print_str("done\n");
+  print_i32((int) arg);
+  print_str("done 1\n");
+  yield();
+  print_str("done 2\n");
+  yield();
+  print_str("done 3\n");
+      
 }
 void (*testthing)(void * a);
 void test_new_coroutine(){
   if(testthing == 0) testthing = test_load_symbol1;
   
-  //new_coroutine(main_forked, 0);
-  test_load_symbol1(0);//testthing(0);
-  //new_coroutine(test_load_symbol1, 0);
-  //new_coroutine(awsm_fork, 0);
-  print_str("???\n");
+  for(int i = 0 ; i < 50; i++)
+    new_coroutine(test_load_symbol1, (void*)i);
+  print_str("done first thread\n");
 }
 
 void test_new_coroutine2(){
