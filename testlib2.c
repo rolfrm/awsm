@@ -8,6 +8,8 @@ void print_f32(float x);
 //void print_f64(double x);
 void require_i32(int x, int y);
 int awsm_fork();
+unsigned long long new_coroutine(void (* f)(void * arg), void * arg);
+
 int fib(int n){
   //print_i32(n);
   if(n <2)
@@ -56,7 +58,7 @@ void subthing(){
 }
 
 int main(){
-  print_str("Hello World!");
+  print_str("Hello World!\n");
   return 0;
 }
 
@@ -83,7 +85,7 @@ void main_forked(){
     awsm_fork();
     main();
   }else{
-    print_i32(fib(17));
+    print_i32(fib(15));
     print_str("\n");
     if(awsm_fork()){
       main();
@@ -101,4 +103,29 @@ void test_print(){
 
 void test_load_symbol(){
   get_symbol("libglfw.so", "glfwCreateWindow", 4, 1);
+}
+
+void test_load_symbol1(void * arg){
+  test_print();
+  print_str("done\n");
+}
+void (*testthing)(void * a);
+void test_new_coroutine(){
+  if(testthing == 0) testthing = test_load_symbol1;
+  
+  //new_coroutine(main_forked, 0);
+  test_load_symbol1(0);//testthing(0);
+  //new_coroutine(test_load_symbol1, 0);
+  //new_coroutine(awsm_fork, 0);
+  print_str("???\n");
+}
+
+void test_new_coroutine2(){
+  if(testthing == 0) testthing = test_load_symbol1;
+  
+  //new_coroutine(main_forked, 0);
+  testthing(0);
+  //new_coroutine(test_load_symbol1, 0);
+  //new_coroutine(awsm_fork, 0);
+  print_str("???\n");
 }

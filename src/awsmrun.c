@@ -4,8 +4,25 @@
 #include <stdint.h>
 #include <string.h>
 #include <awsm.h>
-int main(int argc, char ** argv){
+#include <stdarg.h>
+#include <signal.h>
 
+#define UNUSED(x) (void)(x)
+static void _error(const char * file, int line, const char * msg, ...){
+  UNUSED(file);UNUSED(line);UNUSED(msg);
+  char buffer[1000];  
+  va_list arglist;
+  va_start (arglist, msg);
+  vsprintf(buffer,msg,arglist);
+  va_end(arglist);
+  printf("%s\n", buffer);
+  printf("Got error at %s line %i\n", file,line);
+  raise(SIGINT);
+}
+
+
+int main(int argc, char ** argv){
+  awsm_set_error_callback(_error);
   char * file = NULL;
   char * entrypoint = NULL;
   bool diagnostic = false;

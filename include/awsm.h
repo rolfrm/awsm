@@ -7,6 +7,7 @@ wasm_module * awsm_load_module_from_file(const char * wasm_file);
 bool awsm_process(wasm_module * module, uint64_t steps_total);
 wasm_execution_stack * awsm_load_thread(wasm_module * module, const char * func);
 
+void awsm_set_error_callback(void (*f)(const char * file, int line, const char * msg, ...));
 
 void awsm_register_function(wasm_module * module, void (* func)(wasm_execution_stack * stack), const char * name);
 

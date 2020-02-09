@@ -24,6 +24,10 @@ typedef double f64;
 
 static void (*_error)(const char * file, int line, const char * msg, ...);
 
+void awsm_set_error_callback(void (*f)(const char * file, int line, const char * msg, ...)){
+  _error = f;
+}
+
 #define log _log
 #define ERROR(msg,...) if(_error) _error(__FILE__,__LINE__,msg, ##__VA_ARGS__)
 #define ASSERT(expr) if(__builtin_expect(!(expr), 0)){ERROR("Assertion '" #expr "' Failed");}
@@ -282,15 +286,16 @@ static u64 reader_readu64(wasm_code_reader * rd){
   return value;
 }
 
-static void encode_u64_leb(u64 value, u8 * buffer){
+u32 encode_u64_leb(u64 value, u8 * buffer){
+  u8 * b1 = buffer;
   while(value > 0){
-    
     *buffer = value & 0b01111111L;
-    value <<= 7;
+    value >>= 7;
     if(value)
       *buffer |= 0b10000000L;
     buffer += 1;
   }
+  return buffer - b1;
 }
 
 static u32 reader_readu32(wasm_code_reader * rd){
@@ -577,7 +582,7 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
       {
 	u32 length = reader_readu32(rd);
 	logd("TABLE SECTION (unsupported) %i\n", length);
-
+	//table section is not needed as it is dynamically expanded later...
 	reader_advance(rd, length);
       }
       break;
@@ -701,7 +706,7 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
 	  ASSERT(end == WASM_INSTR_END);
 	  u32 func_count = reader_readu32(rd);
 	  if(module.import_table_count < func_count){
-	    module.import_table = realloc(module.import_table, sizeof(module.import_table[0]) * (1 + func_count));
+	    module.import_table = realloc(module.import_table, sizeof(module.import_table[0]) * (module.import_table_count = (1 + func_count)));
 	  }
 	  for(u32 i = 0; i < func_count; i++){
 	    u32 idx = reader_readu32(rd);
@@ -1239,7 +1244,7 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
 	  ASSERT(pop_label(ctx, false) == false);
 	  break;
 	default:
-	  ERROR("UNSUPPORTED END INstruction: %x\n", end);
+	  ERROR("Unsupported instruction: %x\n", end);
 	}
       }
       break;
@@ -1282,8 +1287,21 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
       }
       break;
     case WASM_INSTR_CALL:
+    case WASM_INSTR_CALL_INDIRECT:
       {
-	u32 fcn = reader_readu32(rd);
+	u32 fcn;
+	if(instr == WASM_INSTR_CALL_INDIRECT){
+	  u32 typeidx = reader_readu32(rd);
+	  UNUSED(typeidx);
+	  ASSERT(reader_read1(rd) == 0);
+	  wasm_pop_u32(ctx, &fcn);
+	  if(fcn >= mod->import_table_count){
+	    ERROR("Invalid indirect call: %i %i\n", fcn, mod->import_table_count);
+	  }
+	  fcn = mod->import_table[fcn];
+	}else{
+	  fcn = reader_readu32(rd);
+	}
 	if(fcn > mod->func_count){
 	  ERROR("Unknown function %i\n", fcn);
 	}
@@ -1291,6 +1309,9 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
 	if(fn->functype == WASM_FUNCTION_TYPE_IMPORT){
 	  logd("CALLf %s (%i)\n",fn->name, fcn);
 	  void (* fcn)(wasm_execution_stack * stack) = fn->code;
+	  if(fcn == NULL){
+	    ERROR("Unlinked symbol: %s\n", fn->name);
+	  }
 	  fcn(ctx);
 	}else{
 
@@ -1325,50 +1346,6 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
 	  }
 	  f->localcount += fn->argcount;
 	}
-      }
-      break;
-    case WASM_INSTR_CALL_INDIRECT:
-      {
-
-	/*u32 ind =*/ reader_readu32(rd);
-	u32 fcn;
-	wasm_pop_u32(ctx, &fcn);
-	if(fcn >= mod->import_table_count){
-	  ERROR("Invalid indirect call: %i\n", fcn);
-	}
-	fcn = mod->import_table[fcn];
-	wasm_function * fn = mod->func + fcn;
-	logd("CALL INDIRECT %s (%i)\n", fn->name, fcn);
-	if(fn->functype == WASM_FUNCTION_TYPE_IMPORT) ERROR("Cannot indirectly call builtin\n");
-	push_stack_frame(ctx);
-	f = ctx->frames + ctx->frame_ptr;
-	rd = &f->rd;
-	f->retcount = fn->retcount;
-	f->stack_pos = ctx->stack_ptr - fn->argcount;
-	//f->argcount = fn->argcount;
-	rd[0] = (wasm_code_reader){.data = fn->code, .size = fn->length, .offset = 0};
-	u32 l = reader_readu32(rd);
-	for(u32 i = 0; i < l; i++){
-	  u32 elemcount = reader_readu32(rd);
-	  u8 type = reader_read1(rd);
-	  
-	  { // sanity check
-	    switch(type){
-	    case WASM_TYPE_F64:
-	    case WASM_TYPE_F32:
-	    case WASM_TYPE_I32:
-	    case WASM_TYPE_I64:
-	      break;
-	    default:
-	      ERROR("Unsupported type\n");
-	    }
-	  }
-	  for(u32 i = 0; i < elemcount; i++){
-	    wasm_push_u64(ctx, 0);
-	  }
-	  f->localcount += elemcount;
-	}
-	f->localcount += fn->argcount;
       }
       break;
     case WASM_INSTR_DROP:
@@ -1427,20 +1404,15 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
 	break;
       }
     case WASM_INSTR_I32_LOAD:
-      load_op(rd, ctx, 4);
-      break;
+      load_op(rd, ctx, 4); break;
     case WASM_INSTR_I64_LOAD:
-      load_op(rd, ctx, 8);
-      break;
+      load_op(rd, ctx, 8); break;
     case WASM_INSTR_F32_LOAD:
-      load_op(rd, ctx, 4);
-      break;
+      load_op(rd, ctx, 4); break;
     case WASM_INSTR_F64_LOAD:
-      load_op(rd, ctx, 8);
-      break;
+      load_op(rd, ctx, 8); break;
     case WASM_INSTR_I32_CONST:
-      wasm_push_i32(ctx, reader_readi32(rd));
-      break;
+      wasm_push_i32(ctx, reader_readi32(rd)); break;
     case WASM_INSTR_I32_LOAD8_S: // 0x2C,
       load_op(rd, ctx, 1);break;
     case WASM_INSTR_I32_LOAD8_U: // 0x2D,
@@ -1773,6 +1745,7 @@ void wasm_fork_stack(wasm_execution_stack * init_ctx){
   ctx->labels = mem_clone(ctx->labels, sizeof(ctx->labels[0]) * ctx->label_capacity);
   wasm_push_i32(ctx, 1);
   wasm_push_i32(init_ctx, 0);
+  ctx->initializer = NULL; // no initialization was done here. Reset it to avoid double free.
 }
 
 void wasm_delete_stack(wasm_execution_stack * stk){
@@ -1865,7 +1838,6 @@ void _require_i32(stack * ctx){
     ERROR("Require: does not match\n");
 }
 
-
 void _sbrk(stack * ctx){
   ERROR("SBRK Not supported!");
   wasm_module * mod = ctx->module;
@@ -1875,6 +1847,39 @@ void _sbrk(stack * ctx){
   wasm_push_u32(ctx,  mod->heap->capacity);
   if(v > 0)
     mod->heap->heap = realloc(mod->heap->heap, mod->heap->capacity += v);
+}
+
+// u64 new_coroutine(void (* f)(void * arg), void * arg);
+
+void _new_coroutine(stack * ctx){
+  u64 val = awsm_pop_u64(ctx);
+  u64 fcn = awsm_pop_u64(ctx);
+  
+
+  wasm_module * module = ctx->module;
+  logd("coroutine: (%i) %s\n", fcn, module->func[fcn].name);
+
+  awsm_push_u64(ctx, 0);
+
+  stack * ctx2 = alloc0(sizeof(ctx[0]));
+  awsm_push_u64(ctx, (u64) ctx2);
+
+  wasm_module_add_stack(module, ctx2);
+  
+  i64 main_index = fcn;
+  
+  logd("Load... %i\n", main_index);
+
+  u8 * code = alloc0(32);
+  code[0] = WASM_INSTR_CALL_INDIRECT;
+  u32 len = encode_u64_leb((u64)fcn, code + 1);
+  ctx2->initializer = mem_clone(code, len + 1);
+
+  wasm_push_u64(ctx2, val);
+  wasm_push_u64(ctx2, fcn);
+  wasm_load_code(ctx2, ctx2->initializer, len + 1);
+  
+
 }
 
 wasm_module * awsm_load_module_from_file(const char * wasm_file){
@@ -1898,6 +1903,7 @@ wasm_module * awsm_load_module_from_file(const char * wasm_file){
   awsm_register_function(mod, _require_i32, "require_i32");
   awsm_register_function(mod, _sbrk, "sbrk");
   awsm_register_function(mod, wasm_fork_stack, "awsm_fork");
+  awsm_register_function(mod, _new_coroutine, "new_coroutine");
   return mod;
 }
 
@@ -1929,6 +1935,9 @@ bool awsm_process(wasm_module * module, u64 steps_total){
 }
 
 stack * awsm_load_thread(wasm_module * module, const char * func){
+  if(module == NULL){
+    ERROR("Module not initialized\n");
+  }
   stack * ctx = alloc0(sizeof(ctx[0]));
   wasm_module_add_stack(module, ctx);
   i64 main_index = func_index(module, func);
@@ -1938,10 +1947,10 @@ stack * awsm_load_thread(wasm_module * module, const char * func){
   }
   logd("Load... %i\n", main_index);
 
-  u8 code[] = {WASM_INSTR_CALL, (u8) main_index, 0, 0, 0 ,0 ,0 ,0, 0 ,0 };
-  encode_u64_leb((u64)main_index, code + 2);
-  ctx->initializer = mem_clone(code, sizeof(code));
-  wasm_load_code(ctx, ctx->initializer, sizeof(code));
+  u8 code[] = {WASM_INSTR_I32_CONST, 1, WASM_INSTR_CALL, 0, 0, 0, 0, 0, 0, 0, 0 };
+  u32 len = encode_u64_leb((u64)main_index, code + 3);
+  ctx->initializer = mem_clone(code, len + 3);
+  wasm_load_code(ctx, ctx->initializer, len + 3);
   return ctx;
 }
 
