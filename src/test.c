@@ -1,5 +1,8 @@
 #include <iron/full.h>
+#include "wasm_instr.h"
 #include <awsm.h>
+#include <stdarg.h>
+#include <signal.h>
 
 
 static u64 reader_readu64(u8 * buf){
@@ -41,6 +44,17 @@ bool test_value(u64 value){
   return true;
 
 }
+void _error(const char * file, int line, const char * msg, ...){
+  UNUSED(file);UNUSED(line);UNUSED(msg);
+  char buffer[1000];  
+  va_list arglist;
+  va_start (arglist, msg);
+  vsprintf(buffer,msg,arglist);
+  va_end(arglist);
+  printf("%s\n", buffer);
+  printf("Got error at %s line %i\n", file,line);
+  raise(SIGINT);
+}
 
 
 int main(int argc, char ** argv){
@@ -52,6 +66,25 @@ int main(int argc, char ** argv){
     if(!test_value((u64)1 << i | i << (i / 2)))
       return 1;
   }
+
+  //awsm_log_diagnostic = diagnostic;
+  wasm_module * mod = awsm_load_module_from_file("./testlib3.wasm");
+  ASSERT(mod != NULL);
+  int idx = awsm_get_function(mod, "main");
+  printf("mod: %i %i\n", mod, idx);
+  awsm_log_diagnostic = true;
+  u8 code[] = {0, WASM_INSTR_I64_CONST, 5, WASM_INSTR_END};
+  awsm_define_function(mod, "p5", code, sizeof(code), 1, 0);
+  wasm_execution_stack * trd = awsm_load_thread(mod, "p5");
+  wasm_execution_stack_keep_alive(trd, true);
+  awsm_push_i64(trd, 10);
+  i64 v2 = awsm_pop_i64(trd);
+  ASSERT(v2 == 10);
+  awsm_process(mod, 10);
+  i64 v = awsm_pop_i64(trd);
+  printf("Result: %i\n", v);
+  ASSERT(v == 5);
+
   
   return 0;
   /*

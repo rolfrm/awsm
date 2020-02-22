@@ -68,7 +68,7 @@ static void dealloc(void * ptr){
   free(ptr);
 }
 
-static void * mem_clone(void * ptr, size_t s){
+static void * mem_clone(const void * ptr, size_t s){
   void * new = alloc(s);
   memcpy(new, ptr, s);
   return new;
@@ -194,10 +194,11 @@ static void wasm_heap_min_capacity(wasm_heap * heap, size_t capacity){
   }
 }
 
-static void wasm_module_add_func(wasm_module * module){
+static size_t wasm_module_add_func(wasm_module * module){
   module->func_count += 1;
   module->func = realloc(module->func, module->func_count * sizeof(module->func[0]));;
   module->func[module->func_count - 1] = (wasm_function){0};
+  return module->func_count - 1;
 }
 
 
@@ -827,7 +828,12 @@ struct _wasm_execution_stack{
 
   u8 * initializer;
   bool yield;
+  bool keep_alive;
 };
+
+void wasm_execution_stack_keep_alive(wasm_execution_stack * trd, bool keep_alive){
+  trd->keep_alive = keep_alive;
+}
 
 
 void wasm_module_add_stack(wasm_module * module, wasm_execution_stack * stk){
@@ -1774,6 +1780,7 @@ int wasm_exec_code3(wasm_execution_stack * ctx, u8 * code, size_t l, u32 steps){
 }
 
 void awsm_register_function(wasm_module * module, void (* func)(wasm_execution_stack * stack), const char * name){
+  
   for(u32 i = 0; i < module->import_func_count; i++){
     if(strcmp(module->func[i].name, name) == 0){
       wasm_function * f = module->func + i;
@@ -1782,6 +1789,22 @@ void awsm_register_function(wasm_module * module, void (* func)(wasm_execution_s
       return;
     }
   }
+}
+
+int awsm_get_function(wasm_module * module, const char * name){
+  return func_index(module, name);
+}
+
+int awsm_define_function(wasm_module * module, const char * name, void * code, size_t len, int retcount, int argcount){
+  size_t j = wasm_module_add_func(module);
+  wasm_function * f = module->func + j;
+  f->name = mem_clone(name, strlen(name) + 1);
+  f->code = mem_clone(code, len);
+  f->length = len;
+  f->module = NULL;//module->name;
+  f->retcount = retcount;
+  f->argcount = argcount;
+  return (int) j;
 }
 
 typedef wasm_execution_stack stack;
@@ -1937,7 +1960,7 @@ bool awsm_process(wasm_module * module, u64 steps_total){
     module->current_stack = i;
     wasm_exec_code2(module->stacks[i], group);    
     module->steps_executed += group;
-    if(wasm_stack_is_finalized(module->stacks[i])){
+    if(module->stacks[i]->keep_alive == false && wasm_stack_is_finalized(module->stacks[i])){
       wasm_delete_stack(module->stacks[i]);
       module->stacks[i] = NULL;
     }
