@@ -28,9 +28,10 @@ void * awsm_pop_ptr(wasm_execution_stack * s);
 
 // default false;
 extern bool awsm_log_diagnostic;
-
+void awsm_diagnostic(bool diagnostic_level_enabled);
 
 
 int awsm_get_function(wasm_module * module, const char * name);
 int awsm_define_function(wasm_module * module, const char * name, void * len, size_t l, int retcnt, int argcnt);
 void wasm_execution_stack_keep_alive(wasm_execution_stack * trd, bool keep_alive);
+void awsm_thread_keep_alive(wasm_execution_stack * s, int keep_alive);

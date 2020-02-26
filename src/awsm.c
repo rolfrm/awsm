@@ -1796,9 +1796,18 @@ int awsm_get_function(wasm_module * module, const char * name){
 }
 
 int awsm_define_function(wasm_module * module, const char * name, void * code, size_t len, int retcount, int argcount){
-  size_t j = wasm_module_add_func(module);
+  int j = awsm_get_function(module, name);
+  bool exists = j != -1;
+  if(j == -1)
+    j = wasm_module_add_func(module);
   wasm_function * f = module->func + j;
-  f->name = mem_clone(name, strlen(name) + 1);
+
+  if(exists){
+    dealloc(f->code);
+  }else{
+    f->name = mem_clone(name, strlen(name) + 1);
+  }
+
   f->code = mem_clone(code, len);
   f->length = len;
   f->module = NULL;//module->name;
@@ -1916,6 +1925,17 @@ void _yield(stack * ctx){
   ctx->yield = true;
 }
 
+void _get_heap_size(stack * ctx){
+  i64 heap_capacity = (i64) ctx->module->heap->capacity;
+  awsm_push_i64(ctx, heap_capacity);
+}
+
+void _set_heap_size(stack * ctx){
+  i64 newcap = awsm_pop_i64(ctx);
+  wasm_heap_min_capacity(ctx->module->heap, (size_t) newcap);
+  
+}
+
 wasm_module * awsm_load_module_from_file(const char * wasm_file){
   size_t buffer_size = 0;
   void * data = read_file_to_buffer(wasm_file, &buffer_size);
@@ -1939,6 +1959,8 @@ wasm_module * awsm_load_module_from_file(const char * wasm_file){
   awsm_register_function(mod, wasm_fork_stack, "awsm_fork");
   awsm_register_function(mod, _new_coroutine, "new_coroutine");
   awsm_register_function(mod, _yield, "yield");
+  awsm_register_function(mod, _get_heap_size, "get_heap_size");
+  awsm_register_function(mod, _set_heap_size, "set_heap_size");
   return mod;
 }
 
@@ -1948,7 +1970,8 @@ bool awsm_process(wasm_module * module, u64 steps_total){
   u64 steps_target = steps_total + module->steps_executed;
   
   u64 group = module->steps_per_context_switch;
-
+  if(module->stacks == NULL)
+    return false;
   while(module->steps_executed < steps_target){
     u64 i = module->current_stack;
     while(module->stacks[i] == NULL){
@@ -1983,11 +2006,15 @@ stack * awsm_load_thread(wasm_module * module, const char * func){
   }
   logd("Load... %i\n", main_index);
 
-  u8 code[] = {WASM_INSTR_I32_CONST, 1, WASM_INSTR_CALL, 0, 0, 0, 0, 0, 0, 0, 0 };
+  u8 code[] = {WASM_INSTR_I32_CONST, 31, WASM_INSTR_CALL, 0, 0, 0, 0, 0, 0, 0, 0 };
   u32 len = encode_u64_leb((u64)main_index, code + 3);
   ctx->initializer = mem_clone(code, len + 3);
   wasm_load_code(ctx, ctx->initializer, len + 3);
   return ctx;
+}
+
+void awsm_diagnostic(bool diagnostic_level_enabled){
+  awsm_log_diagnostic = diagnostic_level_enabled;
 }
 
 void awsm_push_i32(stack * s, int32_t v){
@@ -2048,4 +2075,8 @@ double awsm_pop_f64(stack * s){
 
 void * awsm_pop_ptr(stack * s){
   return s->module->heap->heap + awsm_pop_u32(s);
+}
+
+void awsm_thread_keep_alive(stack * s, int keep_alive){
+  wasm_execution_stack_keep_alive(s, keep_alive);
 }

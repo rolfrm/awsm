@@ -73,7 +73,11 @@ int main(int argc, char ** argv){
   int idx = awsm_get_function(mod, "main");
   printf("mod: %i %i\n", mod, idx);
   awsm_log_diagnostic = true;
-  u8 code[] = {0, WASM_INSTR_I64_CONST, 5, WASM_INSTR_END};
+
+  u8 code2[] = {0, WASM_INSTR_I64_CONST, 19, WASM_INSTR_DROP, WASM_INSTR_I64_CONST, 50, WASM_INSTR_END};
+  int f = awsm_define_function(mod, "p4", code2, sizeof(code2), 1, 0);
+  
+  u8 code[] = {0, WASM_INSTR_I64_CONST, 15, WASM_INSTR_DROP, WASM_INSTR_CALL, f, WASM_INSTR_I64_CONST, 5, WASM_INSTR_END};
   awsm_define_function(mod, "p5", code, sizeof(code), 1, 0);
   wasm_execution_stack * trd = awsm_load_thread(mod, "p5");
   wasm_execution_stack_keep_alive(trd, true);
