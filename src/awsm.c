@@ -204,34 +204,38 @@ static size_t wasm_module_add_func(wasm_module * module){
 
 // todo: Many of these operations can be optimized, by modifying the top of the stack in-place.
 
-#define BINARY_OP(type, op){\
-  type a = {0}, b = {0};    \
-  wasm_pop_##type##_2(ctx, &b, &a);		\
-  wasm_push_##type(ctx, a op b);\
+#define BINARY_OP(type, op){			\
+    type a = {0}, b = {0};			\
+    wasm_pop_##type##_2(ctx, &b, &a);		\
+    wasm_push_##type(ctx, a op b);		\
+    logd("%p " #op " %p\n", a, b);		\
   }break;
 
 #define BINARY_OP_U64(type, op){\
-  type a = {0}, b = {0};    \
-  wasm_pop_##type##_2(ctx, &b, &a);\
-  wasm_push_i32(ctx, (i32)(a op b));		\
+    type a = {0}, b = {0};			\
+    wasm_pop_##type##_2(ctx, &b, &a);		\
+    wasm_push_i32(ctx, (i32)(a op b));		\
+    logd("%p " #op " %p\n", a, b);		\
   }break;
 
-#define BINARY_OPF(type, op){\
-  type a = {0}, b = {0};    \
-  wasm_pop_##type##_2(ctx, &a, &b);\
-  wasm_push_##type(ctx, op(a, b));		\
+#define BINARY_OPF(type, op){			\
+    type a = {0}, b = {0};			\
+    wasm_pop_##type##_2(ctx, &a, &b);		\
+    wasm_push_##type(ctx, op(a, b));		\
+    logd("%f " #op " %f\n", a, b);		\
   }break;
 
-#define UNARY_OPF(type, f){\
-  type a = {0};    \
+#define UNARY_OPF(type, f){			\
+    type a = {0};				\
   wasm_pop_##type(ctx, &a);			\
   wasm_push_##type(ctx, f(a));			\
+  logd("%f " #f "\n", a);			\
   }break;
 
-#define CAST_OP(typea, typeb){\
-  typea a = {0};    \
-  wasm_pop_##typea(ctx, &a);			\
-  wasm_push_##typeb(ctx, (typeb)a);		\
+#define CAST_OP(typea, typeb){			\
+    typea a = {0};				\
+    wasm_pop_##typea(ctx, &a);			\
+    wasm_push_##typeb(ctx, (typeb)a);		\
   }break;
 
 #define OP_NEG(x)-x
@@ -829,6 +833,8 @@ struct _wasm_execution_stack{
   u8 * initializer;
   bool yield;
   bool keep_alive;
+  
+  char * error;
 };
 
 void wasm_execution_stack_keep_alive(wasm_execution_stack * trd, bool keep_alive){
@@ -1187,33 +1193,49 @@ bool wasm_stack_is_finalized(wasm_execution_stack * ctx){
   return false;
 }
 
+
+wasm_execution_stack * current_stack;
+void standard_error_callback(const char * file, int line, const char * msg, ...){
+  UNUSED(file);
+  UNUSED(line);
+  printf("Error: %s\n", msg);
+  current_stack->error = (char *) msg;
+  current_stack->yield = true;
+}
+
+
 int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
+  current_stack = ctx;
   int startcount = stepcount;
   wasm_control_stack_frame * f = ctx->frames + ctx->frame_ptr;
   wasm_code_reader * rd = &f->rd;
   wasm_module * mod = ctx->module;
   ASSERT(mod);
   while(rd->offset < rd->size && stepcount > 0){
+    if(ctx->yield) break;
     stepcount--;
     wasm_instr instr = reader_read1(rd);
     logd("- %x: %s(%x) (/%x)\n", rd->offset, wasm_instr_name[instr], instr, stepcount);
     switch(instr){
+
+    case WASM_INSTR_UNREACHABLE:
+      ERROR("Unreachable code executed\n");
+      logd("THIS HAPPEND\n");
+      break;
     case WASM_INSTR_NOP:
-      {
-	ERROR("NOP NOT SUPPORTED");
-      }
+      ERROR("NOP NOT SUPPORTED");
       break;
     case WASM_INSTR_BLOCK:
       {
 	u8 blktype = reader_read1(rd);
+	logd("block type: %i\n", blktype);
 	push_label(ctx, blktype, true);
       }
       break;
     case WASM_INSTR_LOOP:
       {
-	logd("LOOP\n");
 	u8 blktype = reader_read1(rd);
-	
+	logd("block type: %i\n", blktype);
 	push_label(ctx, blktype, false);
       }
       break;
@@ -1289,6 +1311,25 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
 	  goto wasm_instr_br;
 	reader_readu32(rd);
 	//else continue..
+      }
+      break;
+    case WASM_INSTR_BR_TABLE:
+      {
+	u32 x;
+	wasm_pop_u32(ctx, &x);	
+	u32 cnt = reader_readu32(rd);
+	u32 items[cnt];
+	for(u32 i = 0; i < cnt; i++){
+	  items[i] = reader_readu32(rd);
+	}
+	u32 ret = reader_readu32(rd);
+	u32 brindex;
+	if(x < cnt)
+	  brindex = items[x];
+	else
+	  brindex = ret;
+	logd("br table: arg: %i  idx:%i\n", x, brindex);
+	pop_label2(ctx, brindex);	
       }
       break;
     case WASM_INSTR_RETURN:
@@ -1427,8 +1468,6 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
       load_op(rd, ctx, 4); break;
     case WASM_INSTR_F64_LOAD:
       load_op(rd, ctx, 8); break;
-    case WASM_INSTR_I32_CONST:
-      wasm_push_i32(ctx, reader_readi32(rd)); break;
     case WASM_INSTR_I32_LOAD8_S: // 0x2C,
       load_op(rd, ctx, 1);break;
     case WASM_INSTR_I32_LOAD8_U: // 0x2D,
@@ -1487,8 +1526,15 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
 	logd("MEMORY GROW: New memory size: %p\n", newsize);
       }
       break;
+    case WASM_INSTR_I32_CONST:
+      wasm_push_i32(ctx, reader_readi32(rd)); break;
     case WASM_INSTR_I64_CONST:
-      wasm_push_i64(ctx, reader_readi64(rd)); break;
+      {
+	i64 v = reader_readi64(rd);
+	logd("Const value %p\n", v);
+	wasm_push_i64(ctx, v);
+	break;
+      }
     case WASM_INSTR_F32_CONST:
       wasm_push_f32(ctx, reader_readf32(rd)); break;
     case WASM_INSTR_F64_CONST:
@@ -1816,6 +1862,14 @@ int awsm_define_function(wasm_module * module, const char * name, void * code, s
   return (int) j;
 }
 
+u64 awsm_new_global(wasm_module * module){
+  u64 index = module->global_count;
+  module->global_count += 1;
+  module->globals = realloc(module->globals, sizeof(module->globals[0]) * module->global_count);
+  return index;
+}
+
+
 typedef wasm_execution_stack stack;
 
 void _print_i32(stack * ctx){
@@ -1961,6 +2015,7 @@ wasm_module * awsm_load_module_from_file(const char * wasm_file){
   awsm_register_function(mod, _yield, "yield");
   awsm_register_function(mod, _get_heap_size, "get_heap_size");
   awsm_register_function(mod, _set_heap_size, "set_heap_size");
+  awsm_set_error_callback(standard_error_callback);
   return mod;
 }
 
@@ -1974,7 +2029,7 @@ bool awsm_process(wasm_module * module, u64 steps_total){
     return false;
   while(module->steps_executed < steps_target){
     u64 i = module->current_stack;
-    while(module->stacks[i] == NULL){
+    while(module->stacks[i] == NULL || module->stacks[i]->error != NULL){
       i++;
       if(i >= module->stack_count) i = 0;
       if(i == module->current_stack)
@@ -2079,4 +2134,8 @@ void * awsm_pop_ptr(stack * s){
 
 void awsm_thread_keep_alive(stack * s, int keep_alive){
   wasm_execution_stack_keep_alive(s, keep_alive);
+}
+
+void * awsm_module_heap_ptr(wasm_module * mod){
+  return mod->heap->heap;
 }

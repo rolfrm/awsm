@@ -35,3 +35,5 @@ int awsm_get_function(wasm_module * module, const char * name);
 int awsm_define_function(wasm_module * module, const char * name, void * len, size_t l, int retcnt, int argcnt);
 void wasm_execution_stack_keep_alive(wasm_execution_stack * trd, bool keep_alive);
 void awsm_thread_keep_alive(wasm_execution_stack * s, int keep_alive);
+size_t awsm_new_global(wasm_module * module);
+void * awsm_module_heap_ptr(wasm_module * mod);
