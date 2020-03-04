@@ -402,6 +402,13 @@ static wasm_instr move_to_end_of_block(wasm_code_reader * rd, u32 block){
     case WASM_INSTR_BR_IF:
       reader_readu32(rd);
       break;
+    case WASM_INSTR_BR_TABLE:
+      {
+	u32 c = reader_readu32(rd);
+	for(u32 i = 0; i < c; i++)
+	  reader_readu32(rd);
+	reader_readu32(rd);
+      }break;
     case WASM_INSTR_RETURN:
       break; // dont return while skip block
     case WASM_INSTR_CALL:
