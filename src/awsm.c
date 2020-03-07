@@ -1203,10 +1203,15 @@ bool wasm_stack_is_finalized(wasm_execution_stack * ctx){
 
 wasm_execution_stack * current_stack;
 void standard_error_callback(const char * file, int line, const char * msg, ...){
+  static char errorbuffer[100];
   UNUSED(file);
   UNUSED(line);
-  printf("Error: %s\n", msg);
-  current_stack->error = (char *) msg;
+  va_list args;
+  va_start (args, msg);
+  int cnt = vsprintf (errorbuffer,msg, args);
+  va_end (args);
+  printf("Error: %s\n", errorbuffer);
+  current_stack->error = (char *) mem_clone(errorbuffer, cnt + 1);
   current_stack->yield = true;
 }
 
@@ -1952,6 +1957,13 @@ void _sbrk(stack * ctx){
     mod->heap->heap = realloc(mod->heap->heap, mod->heap->capacity += v);
 }
 
+void _wasm_error(stack * ctx){
+  i32 v;
+  wasm_pop_i32(ctx, &v);
+  char * str = (ctx->module->heap->heap + v);
+  ERROR("%s", str);
+}
+
 // u64 new_coroutine(void (* f)(void * arg), void * arg);
 
 void _new_coroutine(stack * ctx){
@@ -2022,6 +2034,7 @@ wasm_module * awsm_load_module_from_file(const char * wasm_file){
   awsm_register_function(mod, _yield, "yield");
   awsm_register_function(mod, _get_heap_size, "get_heap_size");
   awsm_register_function(mod, _set_heap_size, "set_heap_size");
+  awsm_register_function(mod, _wasm_error, "awsm_error");
   awsm_set_error_callback(standard_error_callback);
   return mod;
 }
