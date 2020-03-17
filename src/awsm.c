@@ -1101,6 +1101,11 @@ static bool pop_label(wasm_execution_stack * ctx, bool move){
 	  wasm_stack_drop(ctx);
 	if(f->retcount)
 	  wasm_push_u64(ctx, return_value);
+	
+      }
+      logd("dropped stack frame: frame stack pos: %i == stack ptr: %i ret count: %i\n", f->stack_pos, ctx->stack_ptr, f->retcount);
+      if(f->stack_pos != ctx->stack_ptr - f->retcount){
+	ERROR("Stack imbalance!");
       }
       ctx->frame_ptr -= 1;
       return true;
@@ -1853,6 +1858,14 @@ int awsm_get_function(wasm_module * module, const char * name){
   return func_index(module, name);
 }
 
+int awsm_get_function_arg_cnt(wasm_module * module, int id){
+  return module->func[id].argcount;
+}
+int awsm_get_function_ret_cnt(wasm_module * module, int id){
+  return module->func[id].retcount;
+}
+
+
 int awsm_define_function(wasm_module * module, const char * name, void * code, size_t len, int retcount, int argcount){
   int j = awsm_get_function(module, name);
   bool exists = j != -1;
@@ -1958,6 +1971,7 @@ void _sbrk(stack * ctx){
 }
 
 void _wasm_error(stack * ctx){
+  
   i32 v;
   wasm_pop_i32(ctx, &v);
   char * str = (ctx->module->heap->heap + v);
@@ -2158,4 +2172,8 @@ void awsm_thread_keep_alive(stack * s, int keep_alive){
 
 void * awsm_module_heap_ptr(wasm_module * mod){
   return mod->heap->heap;
+}
+
+char * awsm_thread_error(wasm_execution_stack * s){
+  return s->error;
 }
