@@ -60,6 +60,12 @@ int main(){
   return 0;
 }
 
+
+void _main(){
+  print_str("Hello World!");
+}
+
+
 int test_main(){
   vec2 v = vec2_new(1.0, -1.5);
   float x = 0;

@@ -7,11 +7,13 @@
 #include <stdarg.h>
 #include "wasm_instr.h"
 #include "awsm.h"
-
+#include "awsm_internal.h"
+typedef int8_t i8;
 typedef int32_t i32;
 typedef int64_t i64;
 
 typedef uint8_t u8;
+typedef uint16_t u16;
 typedef uint32_t u32;
 typedef uint64_t u64;
 
@@ -143,6 +145,7 @@ typedef struct{
   u32 argcount;
   u32 retcount;
   wasm_function_type functype;
+  size_t code_offset;
 }wasm_function;
 
 typedef struct{
@@ -181,6 +184,15 @@ struct _wasm_module{
   u64 steps_executed;
 
   u64 current_stack;
+
+  // debug
+  breakcheck_callback * breakcheck;
+  void ** breakcheck_context;
+  size_t breakcheck_count;
+  bool enabled_breakchecks;
+  u8 * dwarf_debug_lines;
+  size_t dwarf_debug_lines_size;
+  
 };
 
 void wasm_fork_stack(wasm_execution_stack * ctx);
@@ -271,6 +283,11 @@ static u8 reader_read1(wasm_code_reader * rd){
   return b;
 }
 
+static u8 reader_peek1(wasm_code_reader * rd){
+  u8 b = rd->data[rd->offset];
+  return b;
+}
+
 static void reader_read(wasm_code_reader * rd, void * buffer, size_t len){
   ASSERT(rd->offset + len <= rd->size);
   memcpy(buffer, rd->data + rd->offset, len);
@@ -293,19 +310,33 @@ static u64 reader_readu64(wasm_code_reader * rd){
 
 u32 encode_u64_leb(u64 value, u8 * buffer){
   u8 * b1 = buffer;
-  while(value > 0){
+     
+  do{
     *buffer = value & 0b01111111L;
     value >>= 7;
     if(value)
       *buffer |= 0b10000000L;
     buffer += 1;
-  }
+  }while(value > 0);
   return buffer - b1;
 }
 
 static u32 reader_readu32(wasm_code_reader * rd){
   return reader_readu64(rd);
 }
+
+static u32 reader_readu32_fixed(wasm_code_reader * rd){
+  u32 value;
+  reader_read(rd, &value, sizeof(value));
+  return value;
+}
+
+static u16 reader_readu16_fixed(wasm_code_reader * rd){
+  u16 value;
+  reader_read(rd, &value, sizeof(value));
+  return value;
+}
+
 
 static f32 reader_readf32(wasm_code_reader * rd){
   f32 v = 0;
@@ -464,7 +495,20 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
       logd("WASM CUSTOM SECTION\n");
       {
 	u32 length = reader_readu32(rd);
-	reader_advance(rd,length);
+	u32 offset_pre = rd->offset ;
+	char * name = reader_readname(rd);
+	u32 namelen = rd->offset - offset_pre;
+	u32 sectionlen = length - namelen;
+	logd("Custom Section: %s %i\n", name, sectionlen);
+	if(strcmp(name, ".debug_line") == 0){
+	  u8 * buffer = alloc0(sectionlen);
+	  reader_read(rd, buffer, sectionlen);
+	  module.dwarf_debug_lines = buffer;
+	  module.dwarf_debug_lines_size = sectionlen;
+	  printf("DEBUG LINE\n");
+	}else{
+	  reader_advance(rd,length - namelen);
+	}
 	continue;
       }
 
@@ -730,16 +774,22 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
       break;
     case WASM_CODE_SECTION:
       {
+	u32 code_section_offset = rd->offset;
 	u32 length = reader_readu32(rd);
 	logd("Code section: length: %i\n", length);
 	u32 guard = reader_getloc(rd);
 	u32 funccount = reader_readu32(rd);
 	logd("Code Count: %i\n", funccount);
 	for(u32 i = 0; i < funccount; i++){
-	  u32 codesize = reader_readu32(rd);
 	  int funcindex = i + module.import_func_count;
+
+	  
+	  u32 codesize = reader_readu32(rd);
+	  u32 code_function_offset = rd->offset;
 	  module.func[funcindex].code = rd->data + rd->offset;
 	  module.func[funcindex].length = codesize;
+	  module.func[funcindex].code_offset = code_function_offset - code_section_offset;
+
 	  reader_advance(rd, codesize);
 	}
 
@@ -813,6 +863,7 @@ typedef struct{
   u32 stack_pos;
   u32 localcount;
   u32 retcount;
+  int func_id;
   //u32 argcount;
   wasm_code_reader rd;
 }wasm_control_stack_frame;
@@ -838,6 +889,7 @@ struct _wasm_execution_stack{
   wasm_module * module;
 
   u8 * initializer;
+  bool complex_state;
   bool yield;
   bool keep_alive;
   
@@ -1182,7 +1234,7 @@ static bool push_stack_frame(wasm_execution_stack * ctx){
   f += 1;
   memset(f, 0, sizeof(ctx->frames[0]));
   f->label_offset = block;
-
+  f->func_id = -1;
   return changed;
 }
 
@@ -1223,13 +1275,19 @@ void standard_error_callback(const char * file, int line, const char * msg, ...)
 
 int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
   current_stack = ctx;
+  ctx->complex_state = ctx->yield || breakcheck_enabled(ctx);
   int startcount = stepcount;
   wasm_control_stack_frame * f = ctx->frames + ctx->frame_ptr;
   wasm_code_reader * rd = &f->rd;
   wasm_module * mod = ctx->module;
   ASSERT(mod);
   while(rd->offset < rd->size && stepcount > 0){
-    if(ctx->yield) break;
+    if(ctx->complex_state){
+      if(ctx->yield) break;
+      if(breakcheck_enabled(ctx))
+	breakcheck_run(ctx);
+    }
+
     stepcount--;
     wasm_instr instr = reader_read1(rd);
     logd("- %x: %s(%x) (/%x)\n", rd->offset, wasm_instr_name[instr], instr, stepcount);
@@ -1395,6 +1453,7 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
 	  rd = &f->rd;
 	  f->retcount = fn->retcount;
 	  f->stack_pos = ctx->stack_ptr - fn->argcount;
+	  f->func_id = fcn;
 	  //f->argcount = fn->argcount;
 	  rd[0] = (wasm_code_reader){.data = fn->code, .size = fn->length, .offset = 0};
 	  u32 l = reader_readu32(rd);
@@ -1812,6 +1871,7 @@ void wasm_load_code(wasm_execution_stack * ctx, u8 * code, size_t l){
   f->rd.offset = 0;
   f->rd.size = l;
   f->rd.data = code;
+  f->func_id = -1;
   ctx->frame_ptr = 0;
 }
 
@@ -1864,6 +1924,7 @@ int awsm_get_function_arg_cnt(wasm_module * module, int id){
 int awsm_get_function_ret_cnt(wasm_module * module, int id){
   return module->func[id].retcount;
 }
+
 
 
 int awsm_define_function(wasm_module * module, const char * name, void * code, size_t len, int retcount, int argcount){
@@ -2083,22 +2144,45 @@ bool awsm_process(wasm_module * module, u64 steps_total){
 }
 
 stack * awsm_load_thread(wasm_module * module, const char * func){
+  return awsm_load_thread_arg(module, func, 0);
+}
+
+stack * awsm_load_thread_arg(wasm_module * module, const char * func, u32 arg){
   if(module == NULL){
     ERROR("Module not initialized\n");
   }
   stack * ctx = alloc0(sizeof(ctx[0]));
   wasm_module_add_stack(module, ctx);
-  i64 main_index = func_index(module, func);
+  int main_index = awsm_get_function(module, func);
   if(main_index == -1){
     log("Unable to lookup function '%s'\n", func);
     return NULL;
   }
-  logd("Load... %i\n", main_index);
+  int arg_cnt = awsm_get_function_arg_cnt(module, main_index);
+  
+  int ret_cnt = awsm_get_function_ret_cnt(module, main_index);
+  logd("Load Thread. (%s) %x (%i) -> %i\n", func, main_index, arg_cnt, ret_cnt);
+  u8 code[128] = {0};
+  code[0] = WASM_INSTR_I32_CONST;
+  code[1] = 31;
+  u32 offset = 2;
+  for(int i = 0; i < arg_cnt; i++){
+    code[offset] = WASM_INSTR_I32_CONST;
+    offset += 1;
+    int len = encode_u64_leb((u64)(i == 0 ? arg : 0), code + offset);
+    offset += len;
+  }
+  code[offset] = WASM_INSTR_CALL;
+  offset += 1;
+  offset += encode_u64_leb((u64)main_index, code + offset);
+  for(int i = 0; i < ret_cnt; i++){
+    code[offset + i] = WASM_INSTR_DROP;
+  }
+  offset += ret_cnt;
+  
+  ctx->initializer = mem_clone(code, offset);
 
-  u8 code[] = {WASM_INSTR_I32_CONST, 31, WASM_INSTR_CALL, 0, 0, 0, 0, 0, 0, 0, 0 };
-  u32 len = encode_u64_leb((u64)main_index, code + 3);
-  ctx->initializer = mem_clone(code, len + 3);
-  wasm_load_code(ctx, ctx->initializer, len + 3);
+  wasm_load_code(ctx, ctx->initializer, offset);
   return ctx;
 }
 
@@ -2177,3 +2261,284 @@ void * awsm_module_heap_ptr(wasm_module * mod){
 char * awsm_thread_error(wasm_execution_stack * s){
   return s->error;
 }
+
+
+// debug api
+
+void breakcheck_run(wasm_execution_stack * ctx){
+  wasm_module * mod = ctx->module;
+  for(u32 i = 0; i < mod->breakcheck_count; i++){
+    mod->breakcheck[i](ctx,mod->breakcheck_context[i]);
+  }
+}
+
+bool breakcheck_enabled(wasm_execution_stack * ctx){
+  return ctx->module->enabled_breakchecks > 0;
+}
+
+breakcheck_id awsm_debug_attach_breakcheck(wasm_module * mod, breakcheck_callback f, void * user_context){
+  int id = -1;
+  for(size_t i = 0; i < mod->breakcheck_count; i++){
+    if(mod->breakcheck[id] == NULL){
+      id = i;
+      break;
+    }
+  }
+  if(id == -1){
+    id = mod->breakcheck_count;
+    mod->breakcheck_count += 1;
+    mod->breakcheck = realloc(mod->breakcheck, mod->breakcheck_count * sizeof(mod->breakcheck[0]));
+    mod->breakcheck_context = realloc(mod->breakcheck_context, mod->breakcheck_count * sizeof(mod->breakcheck_context[0]));
+  }
+  mod->breakcheck[id] = f;
+  mod->breakcheck_context[id] = user_context;
+  mod->enabled_breakchecks += 1;
+  return id;
+}
+
+void awsm_debug_remove_breakcheck(wasm_module * mod, breakcheck_id id){
+  mod->breakcheck[id] = NULL;
+  mod->breakcheck_context[id] = NULL;
+  mod->enabled_breakchecks -= 1;
+}
+
+int awsm_debug_next_instr(wasm_execution_stack * ctx)
+{
+  wasm_control_stack_frame * f = ctx->frames + ctx->frame_ptr;
+  wasm_code_reader * rd = &f->rd;
+  wasm_instr instr = reader_peek1(rd);
+  return instr;
+}
+
+int awsm_debug_location(wasm_execution_stack * ctx){
+  wasm_control_stack_frame * f = ctx->frames + ctx->frame_ptr;
+  wasm_code_reader * rd = &f->rd;
+  return rd->offset;
+}
+
+void dwarf_source_location(u8 * dwarf_code, u32 code_size, u32 code_offset, char * out_filename, int * out_line){
+  wasm_code_reader _rd = { .data = dwarf_code, .offset = 0, .size = code_size};
+  wasm_code_reader * rd = &_rd;
+  UNUSED(out_filename); UNUSED(out_line); UNUSED(code_offset);
+  //reader_read1(rd);
+  u32 length = reader_readu32_fixed(rd);
+  u16 version = reader_readu16_fixed(rd);
+  u32 prolog_length = reader_readu32_fixed(rd);
+  u8 minimum_instr_length = reader_read1(rd);
+  u8 maxmium_ops_per_instr = reader_read1(rd);
+  u8 default_is_stmt = reader_read1(rd);
+  i8 line_base = (i8)reader_read1(rd);
+  u8 line_range = reader_read1(rd);
+  u8 opcode_base = reader_read1(rd);
+  u32 opcode_lengths[opcode_base];
+  opcode_lengths[0] = 0;
+  for(u8 i = 1 ;i < opcode_base; i++){
+    opcode_lengths[i] = reader_readu32(rd);
+  }
+  UNUSED(opcode_lengths);
+  printf("DWARF %i %i %i %i %i %i\n", length, code_size, version, prolog_length, minimum_instr_length, maxmium_ops_per_instr);
+  printf("      %i %i %i %i \n" ,default_is_stmt, line_base, line_range, opcode_base);
+  printf("\n      ");
+  for(u8 i = 0; i < opcode_base; i++){
+    printf( "%i ", opcode_lengths[i]);
+  }
+  printf("\n");
+  while(true){
+    //u32 offset1 = rd->offset;
+    u8 check = reader_read1(rd);
+    if(check == 0){
+      printf("DIR Break\n");
+      break;
+    }
+    while(reader_read1(rd) != 0){
+
+    }
+    //u32 offset2 = rd->offset;
+
+  }
+
+  while(true){
+    u32 offset1 = rd->offset;
+    u8 check = reader_read1(rd);
+    if(check == 0){
+      printf("FILE Break\n");
+      break;
+    }
+    while(reader_read1(rd) != 0){
+
+    }
+    //u32 offset2 = rd->offset;
+
+    u32 dir = reader_readu32(rd);
+    u32 modified = reader_readu32(rd);
+    u32 filelen = reader_readu32(rd);
+    printf("FILE: %s %i %i %i\n", rd->data + offset1, dir, modified, filelen);
+  }
+
+  //u32 opcode = (1 - line_base) + (line_range * 1) + opcode_base;
+  //printf("opcode: %i\n", opcode - opcode_base);
+  
+  u32 column =0, line = 1, address = 0, op_index = 0;;
+  bool prologue_end = true, is_stmt = default_is_stmt;
+
+  for(int i = 0; i < 100; i++){
+    u8 opcode = reader_read1(rd);
+    
+    printf("OPCODE: %i\n", opcode);
+
+  
+    switch(opcode){
+    case 0: // extended opcode
+      {
+	u32 len = reader_readu32(rd);
+	u8 code = reader_read1(rd);
+
+	switch(code){
+	case 0:
+	  printf("ERROR!!\n");
+	  break;
+	  case 1: //DW_LNE_end_sequence
+	    {
+	      printf("             ROW: %x %i %i    %i %i\n", address, line, column,  prologue_end, is_stmt);
+	      line = 1;
+	      column = 0;
+	      op_index = 0;
+	      break;
+	    }
+	    
+	case 2: //DW_LNE_set_address  
+	  {
+	    u32 addr = reader_readu32_fixed(rd);
+	    //printf("SET ADDRESS: %i\n", addr);
+	    address = addr;
+	    op_index = 0;
+	    break;
+	  }
+	  
+	case 3: //DW_LNE_define_file 
+	  {
+	    
+	    break;
+	  }
+	case 4:{ // DW_LNE_set_discriminator
+	  
+	  break;
+	}
+	}
+	UNUSED(len);
+	printf("EXT: %i %i\n", len, code);
+	break;
+      }
+    case 1: //DW_LNS_copy
+      {
+	printf("             ROW: %x %i %i    %i %i\n", address, line, column,  prologue_end, is_stmt);
+	prologue_end = false;
+	break;
+      }
+    case 2: // advance pc
+      {
+
+	u32 adjusted = reader_readu32(rd);
+	printf("Advance PC: %i\n", adjusted);
+	u32 advance = adjusted / line_range;
+	u32 new_address = address + (op_index + advance) / maxmium_ops_per_instr;
+	u32 new_op_index = (op_index + advance) % maxmium_ops_per_instr;
+	//u32 line_increment = line_base + (adjusted % line_range);
+	address = new_address;
+	op_index = new_op_index;
+	//line += line_increment;
+	break;
+      }
+
+      
+      
+    case 3: //Advance Line
+      {
+	i32 count = reader_readi32(rd);
+	line += count;
+	printf("advance line: %i\n", count);
+	break;
+      }
+    case 5: //DW_LNS_set_column
+      {
+	column = reader_readu32(rd);
+	//printf("COL: %i\n", column);
+	break;
+      }
+    case 6:{ //negate stmt
+      is_stmt = !is_stmt;
+      break;
+    }
+
+    case 10: // set prologue end
+      {
+	prologue_end = true;
+	//printf("Prolog end\n");
+	break;
+      }
+    default:
+
+      if(opcode > opcode_base){
+	u32 adjusted = opcode - opcode_base;
+	u32 advance = adjusted / line_range;
+	u32 new_address = address + (op_index + advance) / maxmium_ops_per_instr;
+	u32 new_op_index = (op_index + advance) % maxmium_ops_per_instr;
+	u32 line_increment = line_base + (adjusted % line_range);
+	address = new_address;
+	op_index = new_op_index;
+	line += line_increment;
+	//printf("Adjusting: %x %i\n", address, op_index);
+	printf("             ROW: %x %i %i    %i %i\n", address, line, column,  prologue_end, is_stmt);
+	prologue_end = false;
+
+      }
+      else{
+	ERROR("ERR");
+      }
+      break;
+
+    }
+  }
+
+  
+  /*
+  // registers
+  u32 address = 0, op_index = 0, file = 0, line = 1, column = 0,
+    is_stmt = default_is_stmt, basic_block = 0, end_sequence = 0, prologue_end = 0,
+    epilogue_begin = 0, isa = 0, descriminator = 0;
+  */
+  
+}
+
+int awsm_debug_source_location(wasm_execution_stack * ctx, char * out_filename, int * out_line){
+  UNUSED(out_filename);
+  UNUSED(out_line);
+  wasm_control_stack_frame * f = ctx->frames + ctx->frame_ptr;
+  wasm_code_reader * rd = &f->rd;
+  int func_id = f->func_id;
+  wasm_module * mod = ctx->module;
+  if((int)mod->func_count < func_id)
+    return 0;
+  u32 code_offset = mod->func[func_id].code_offset + rd->offset;
+  printf("CODE OFFSET: %x\n", code_offset);
+  dwarf_source_location(mod->dwarf_debug_lines, mod->dwarf_debug_lines_size, code_offset, out_filename, out_line);
+  return 1;
+}
+
+const char * awsm_debug_current_function(wasm_execution_stack * ctx){
+  wasm_control_stack_frame * f = ctx->frames + ctx->frame_ptr;
+  int func_id = f->func_id;
+  wasm_module * mod = ctx->module;
+  if(func_id < 0) return NULL;
+  if((int)mod->func_count < func_id)
+    return "unknown_function";
+  return mod->func[func_id].name;
+}
+
+const char * awsm_debug_instr_name(int instr){
+  if(instr > wasm_instr_count || instr < 0)
+    return "UNKNOWN_INSTRUCTION";
+  return wasm_instr_name[instr];
+}
+
+
