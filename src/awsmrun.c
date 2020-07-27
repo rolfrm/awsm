@@ -25,10 +25,13 @@ void print_at_break(wasm_execution_stack * stk, void * ctx){
   int instr = awsm_debug_next_instr(stk);
   const char * currentf = awsm_debug_current_function(stk);
   printf("%s %i %s\n", awsm_debug_instr_name(instr), awsm_debug_location(stk), currentf);
-  char filename[100];
-  int line;
-  int ok = awsm_debug_source_location(stk, filename, &line);
-  printf("OK? %i\n", ok);
+  char filename[100] = {0};
+  int line = 0;
+  int err = awsm_debug_source_location(stk, filename, &line);
+  printf("OK? %i\n", err);
+  if(err == 0){
+    printf("            >>>     %s : %i\n", filename, line);
+  }
 }
 
 int main(int argc, char ** argv){
