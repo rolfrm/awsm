@@ -41,6 +41,9 @@ void wasm_execution_stack_keep_alive(wasm_execution_stack * trd, bool keep_alive
 void awsm_thread_keep_alive(wasm_execution_stack * s, int keep_alive);
 size_t awsm_new_global(wasm_module * module);
 void * awsm_module_heap_ptr(wasm_module * mod);
+size_t awsm_heap_size(wasm_module * mod);
+void awsm_heap_increase(wasm_module * mod, size_t amount);
+wasm_module * awsm_stack_module(wasm_execution_stack * s);
 
 // Debugging API
 typedef void (* breakcheck_callback)(wasm_execution_stack * stl, void * user_context);

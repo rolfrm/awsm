@@ -206,6 +206,14 @@ static void wasm_heap_min_capacity(wasm_heap * heap, size_t capacity){
   }
 }
 
+size_t awsm_heap_size(wasm_module * mod){
+  return mod->heap->capacity;
+}
+
+void awsm_heap_increase(wasm_module * mod, size_t amount){
+  wasm_heap_min_capacity(mod->heap, mod->heap->capacity + amount);
+}
+
 static size_t wasm_module_add_func(wasm_module * module){
   module->func_count += 1;
   module->func = realloc(module->func, module->func_count * sizeof(module->func[0]));;
@@ -1905,7 +1913,21 @@ int wasm_exec_code3(wasm_execution_stack * ctx, u8 * code, size_t l, u32 steps){
 void awsm_register_function(wasm_module * module, void (* func)(wasm_execution_stack * stack), const char * name){
   
   for(u32 i = 0; i < module->import_func_count; i++){
+
     if(strcmp(module->func[i].name, name) == 0){
+
+      wasm_function * f = module->func + i;
+      f->functype = WASM_FUNCTION_TYPE_IMPORT;
+      f->code = func;
+      return;
+    }
+  }
+  // overwrite local func. This is useful since the VM can provide prototype function definitions
+  // and then overwrite them with an actual implementation.
+  for(u32 _i = 0; _i < module->local_func_count; _i++){
+    u32 i = module->import_func_count + _i;
+    if(strcmp(module->func[i].name, name) == 0){
+      
       wasm_function * f = module->func + i;
       f->functype = WASM_FUNCTION_TYPE_IMPORT;
       f->code = func;
@@ -1971,9 +1993,7 @@ void _print_i64(stack * ctx){
 }
 
 void _print_str(stack * ctx){
-  i32 v;
-  wasm_pop_i32(ctx, &v);
-  char * str = (ctx->module->heap->heap + v);
+  char * str = awsm_pop_ptr(ctx);
   i32 v2 = printf("%s", str);
   wasm_push_i32(ctx, v2);
 }
@@ -2261,6 +2281,13 @@ void * awsm_module_heap_ptr(wasm_module * mod){
 char * awsm_thread_error(wasm_execution_stack * s){
   return s->error;
 }
+
+wasm_module * awsm_stack_module(wasm_execution_stack * s){
+  return s->module;
+}
+
+size_t awsm_heap_size(wasm_module * mod);
+void awsm_heap_increase(wasm_module * mod, size_t amount);
 
 
 // debug api
