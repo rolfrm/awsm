@@ -57,10 +57,9 @@ void print_at_break(wasm_execution_stack * stk, void * ctx){
 	size_t len = 0;
 	if(getline(&linebuf, &len, fp) != -1){
 	  linebuf[strlen(linebuf) - 1] = 0;
-	  printf("    %s %s \n", linebuf, i == 1 ? "<----" :"");
+	  printf("%s:%i   %s %s", filename, line, linebuf, i == 1 ? "<----" :"");
 	}
       }
-      printf("\n");
       free(linebuf);
       fclose(fp);
       getchar();
