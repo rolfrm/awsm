@@ -6,6 +6,7 @@
 #include <awsm.h>
 #include <stdarg.h>
 #include <signal.h>
+#include <unistd.h>
 
 #define UNUSED(x) (void)(x)
 static void _error(const char * file, int line, const char * msg, ...){
@@ -19,18 +20,57 @@ static void _error(const char * file, int line, const char * msg, ...){
   printf("Got error at %s line %i\n", file,line);
   raise(SIGINT);
 }
-
+int lastline = -1;
 void print_at_break(wasm_execution_stack * stk, void * ctx){
   UNUSED(ctx);
   int instr = awsm_debug_next_instr(stk);
   const char * currentf = awsm_debug_current_function(stk);
-  printf("%s %i %s\n", awsm_debug_instr_name(instr), awsm_debug_location(stk), currentf);
+  UNUSED(currentf);
+  UNUSED(instr);
+  //printf("%s %i %s\n", awsm_debug_instr_name(instr), awsm_debug_location(stk), currentf);
   char filename[100] = {0};
   int line = 0;
   int err = awsm_debug_source_location(stk, filename, &line);
-  printf("OK? %i\n", err);
+  
   if(err == 0){
-    printf("            >>>     %s : %i\n", filename, line);
+    if(line == 0)
+      return;
+    if(line == lastline)
+       return;
+    lastline = line;
+
+    char filename2[100];
+    sprintf(filename2, "./%s", filename);
+    //printf("            >>>     %s : %i\n", filename2, line - 1);
+
+
+    
+    FILE * fp = fopen(filename2, "r");
+    if(fp != NULL){
+      char * linebuf = NULL;
+
+      for(int i = 0; i < line-1; i++){
+	size_t len = 0;
+	getline(&linebuf, &len, fp);
+      }
+      for(int i = 0; i < 1; i++){
+	size_t len = 0;
+	if(getline(&linebuf, &len, fp) != -1){
+	  linebuf[strlen(linebuf) - 1] = 0;
+	  printf("    %s %s \n", linebuf, i == 1 ? "<----" :"");
+	}
+      }
+      printf("\n");
+      free(linebuf);
+      fclose(fp);
+      getchar();
+    }
+    
+
+
+    
+  }else{
+    printf("Cannot read line data (%i)\n", err);  
   }
 }
 

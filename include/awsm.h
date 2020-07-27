@@ -53,3 +53,4 @@ const char * awsm_debug_instr_name(int instr);
 int awsm_debug_location(wasm_execution_stack * ctx);
 const char * awsm_debug_current_function(wasm_execution_stack * ctx);
 int awsm_debug_source_location(wasm_execution_stack * ctx, char * out_filename, int * out_line);
+int awsm_debug_source_address(wasm_execution_stack * ctx);

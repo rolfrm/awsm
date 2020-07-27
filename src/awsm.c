@@ -2317,7 +2317,8 @@ int awsm_debug_location(wasm_execution_stack * ctx){
 }
 
 typedef struct{
-  u32 column, line, address, op_index;
+  u32 column, line, address, op_index, prev_line;
+  
   bool prologue_end, is_stmt;
   
   bool default_is_stmt;
@@ -2351,6 +2352,7 @@ void dwarf_debug_line_advance(dwarf_debug_line_state_machine * sm, i32 amount, b
   sm->address = new_address;
   sm->op_index = new_op_index;
   if(incr_line){
+    sm->prev_line = sm->line;
     u32 line_increment = sm->line_base + (amount % sm->line_range);
     sm->line += line_increment;
   }
@@ -2370,7 +2372,7 @@ bool dwarf_debug_line_commit_row(dwarf_debug_line_state_machine * sm, u32 code_o
     strcpy(out_filename, (char *) file);
 
     
-    *out_line = sm->line;
+    *out_line = sm->prev_line;
     return true;
   }
   return false;
@@ -2384,7 +2386,10 @@ int dwarf_source_location(u8 * dwarf_code, u32 code_size, u32 code_offset, char 
   //reader_read1(rd);
   u32 length = reader_readu32_fixed(rd);
   u16 version = reader_readu16_fixed(rd);
+  ASSERT(version == 4);
   u32 prolog_length = reader_readu32_fixed(rd);
+  UNUSED(prolog_length);
+  UNUSED(length);
   sm.minimum_instr_length = reader_read1(rd);
   sm.maxmium_ops_per_instr = reader_read1(rd);
   sm.default_is_stmt = reader_read1(rd);
@@ -2397,35 +2402,31 @@ int dwarf_source_location(u8 * dwarf_code, u32 code_size, u32 code_offset, char 
     opcode_lengths[i] = reader_readu32(rd);
   }
   UNUSED(opcode_lengths);
-  printf("DWARF %i %i %i %i %i %i\n", length, code_size, version, prolog_length, sm.minimum_instr_length, sm.maxmium_ops_per_instr);
-  printf("      %i %i %i %i \n" ,sm.default_is_stmt, sm.line_base, sm.line_range, opcode_base);
-  printf("\n      ");
-  for(u8 i = 0; i < opcode_base; i++){
-    printf( "%i ", opcode_lengths[i]);
-  }
-  printf("\n");
+  UNUSED(version);
+  
+  //printf("DWARF %i %i %i %i %i %i\n", length, code_size, version, prolog_length, sm.minimum_instr_length, sm.maxmium_ops_per_instr);
+  //printf("      %i %i %i %i \n" ,sm.default_is_stmt, sm.line_base, sm.line_range, opcode_base);
+  //printf("\n      ");
+  //for(u8 i = 0; i < opcode_base; i++){
+  //  printf( "%i ", opcode_lengths[i]);
+  //}
+  //printf("\n");
   while(true){
-    //u32 offset1 = rd->offset;
+    // read the dir names  ( unused )x;
     u8 check = reader_read1(rd);
-    if(check == 0){
-      printf("DIR Break\n");
+    if(check == 0)
       break;
-    }
-    while(reader_read1(rd) != 0){
-
-    }
-    //u32 offset2 = rd->offset;
-
+    while(reader_read1(rd) != 0){  }
   }
 
   u8 * file_start;
   file_start = rd->data + rd->offset;
   
   while(true){
-    u32 offset1 = rd->offset;
+    // read the file names ( unused )
     u8 check = reader_read1(rd);
     if(check == 0){
-      printf("FILE Break\n");
+
       break;
     }
     while(reader_read1(rd) != 0){
@@ -2436,7 +2437,8 @@ int dwarf_source_location(u8 * dwarf_code, u32 code_size, u32 code_offset, char 
     u32 dir = reader_readu32(rd);
     u32 modified = reader_readu32(rd);
     u32 filelen = reader_readu32(rd);
-    printf("FILE: %s %i %i %i\n", rd->data + offset1, dir, modified, filelen);
+    UNUSED(dir);UNUSED(modified);UNUSED(filelen);
+    //printf("FILE: %s %i %i %i\n", rd->data + offset1, dir, modified, filelen);
   }
 
   //u32 opcode = (1 - line_base) + (line_range * 1) + opcode_base;
@@ -2453,10 +2455,8 @@ int dwarf_source_location(u8 * dwarf_code, u32 code_size, u32 code_offset, char 
     if(rd->offset ==rd->size || end)
       break;
     u8 opcode = reader_read1(rd);
+    //printf("opcode %i\n", opcode);
     
-    //printf("OPCODE: %i\n", opcode);
-
-  
     switch(opcode){
     case 0: // extended opcode
       {
@@ -2469,7 +2469,6 @@ int dwarf_source_location(u8 * dwarf_code, u32 code_size, u32 code_offset, char 
 	  break;
 	  case 1: //DW_LNE_end_sequence
 	    {
-	  
 	      end = dwarf_debug_line_commit_row(&sm, code_offset, out_filename, out_line);
 	      dwarf_debug_line_state_machine_reset(&sm, false);
 	      break;
@@ -2517,19 +2516,15 @@ int dwarf_source_location(u8 * dwarf_code, u32 code_size, u32 code_offset, char 
 	break;
       }
 
-      
-      
     case 3: //Advance Line
       {
 	i32 count = reader_readi32(rd);
 	sm.line += count;
-	//printf("advance line: %i\n", count);
 	break;
       }
     case 5: //DW_LNS_set_column
       {
 	sm.column = reader_readu32(rd);
-	//printf("COL: %i\n", column);
 	break;
       }
     case 6:{ //negate stmt
@@ -2542,8 +2537,6 @@ int dwarf_source_location(u8 * dwarf_code, u32 code_size, u32 code_offset, char 
 	dwarf_debug_line_advance(&sm, 255, false);
 	break;
     }
-
-    
 
     case 10: // set prologue end
       {
@@ -2570,15 +2563,20 @@ int dwarf_source_location(u8 * dwarf_code, u32 code_size, u32 code_offset, char 
 
   if(end) return 0;
   return 1;
+}
 
-  
-  /*
-  // registers
-  u32 address = 0, op_index = 0, file = 0, line = 1, column = 0,
-    is_stmt = default_is_stmt, basic_block = 0, end_sequence = 0, prologue_end = 0,
-    epilogue_begin = 0, isa = 0, descriminator = 0;
-  */
-  
+int awsm_debug_source_address(wasm_execution_stack * ctx){
+  wasm_control_stack_frame * f = ctx->frames + ctx->frame_ptr;
+  wasm_code_reader * rd = &f->rd;
+  int func_id = f->func_id;
+  wasm_module * mod = ctx->module;
+  if((int)mod->func_count < func_id)
+    return -1;
+  if(mod->func[func_id].name == NULL)
+    return -1;
+  u32 code_offset = mod->func[func_id].code_offset + rd->offset;
+  return (int)code_offset;
+
 }
 
 int awsm_debug_source_location(wasm_execution_stack * ctx, char * out_filename, int * out_line){
@@ -2590,8 +2588,10 @@ int awsm_debug_source_location(wasm_execution_stack * ctx, char * out_filename, 
   wasm_module * mod = ctx->module;
   if((int)mod->func_count < func_id)
     return 1;
+  if(mod->func[func_id].name == NULL)
+    return 1;
   u32 code_offset = mod->func[func_id].code_offset + rd->offset;
-  printf("CODE OFFSET: %x\n", code_offset);
+  //printf("CODE OFFSET: %x\n", code_offset);
   return dwarf_source_location(mod->dwarf_debug_lines, mod->dwarf_debug_lines_size, code_offset, out_filename, out_line);
 
 }
