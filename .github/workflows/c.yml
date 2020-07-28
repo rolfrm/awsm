@@ -1,4 +1,4 @@
-name: C/C++ CI
+name: C CI
 
 on:
   push:
@@ -17,5 +17,3 @@ jobs:
       run: make
     - name: make
       run: make -f makefile.awsmrun
-    - name: make
-      run: make -f makefile.test
