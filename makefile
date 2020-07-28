@@ -1,6 +1,6 @@
 OPT = -g0 -O3
 
-LIB_SOURCES1 = awsm.c
+LIB_SOURCES1 = awsm.c dwarf.c
 LIB_SOURCES = $(addprefix src/, $(LIB_SOURCES1))
 
 CC = gcc

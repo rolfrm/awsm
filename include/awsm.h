@@ -44,6 +44,8 @@ void * awsm_module_heap_ptr(wasm_module * mod);
 size_t awsm_heap_size(wasm_module * mod);
 void awsm_heap_increase(wasm_module * mod, size_t amount);
 wasm_module * awsm_stack_module(wasm_execution_stack * s);
+void awsm_module_set_user_data(wasm_module * mod, void * ptr);
+void * awsm_module_get_user_data(wasm_module * mod);
 
 // Debugging API
 typedef void (* breakcheck_callback)(wasm_execution_stack * stl, void * user_context);

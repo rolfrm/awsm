@@ -8,35 +8,14 @@
 #include "wasm_instr.h"
 #include "awsm.h"
 #include "awsm_internal.h"
-typedef int8_t i8;
-typedef int32_t i32;
-typedef int64_t i64;
-
-typedef uint8_t u8;
-typedef uint16_t u16;
-typedef uint32_t u32;
-typedef uint64_t u64;
-
-typedef float f32;
-typedef double f64;
-#define UNUSED(x) (void)(x)
-#define MAX(X,Y)(X > Y ? X : Y)
-#define MIN(X,Y)(X < Y ? X : Y)
-#define SIGN(x) (x > 0 ? 1 : (x < 0 ? -1 : 0))
-
-static void (*_error)(const char * file, int line, const char * msg, ...);
 
 void awsm_set_error_callback(void (*f)(const char * file, int line, const char * msg, ...)){
   _error = f;
 }
 
-#define log _log
-#define ERROR(msg,...) if(_error) _error(__FILE__,__LINE__,msg, ##__VA_ARGS__)
-#define ASSERT(expr) if(__builtin_expect(!(expr), 0)){ERROR("Assertion '" #expr "' Failed");}
-
 bool awsm_log_diagnostic = false;
 
-static void logd(const char * msg, ...){
+void logd(const char * msg, ...){
 UNUSED(msg);
 #ifdef DEBUG
 
@@ -96,106 +75,6 @@ static void * read_file_to_buffer(const char * filepath, size_t * size){
   return data;
 }
 
-#define WASM_PAGE_SIZE 64000
-
-// This controls how many steps are executed in each fork context before switching.
-#define AWSM_DEFAULT_STEPS_PER_CONTEXT_SWITCH 20
-
-typedef enum WASM_SECTION{
-  WASM_CUSTOM_SECTION = 0,
-  WASM_TYPE_SECTION = 1,
-  WASM_IMPORT_SECTION = 2,
-  WASM_FUNCTION_SECTION = 3,
-  WASM_TABLE_SECTION = 4,
-  WASM_MEMORY_SECTION = 5,
-  WASM_GLOBAL_SECTION = 6,
-  WASM_EXPORT_SECTION = 7,
-  WASM_START_SECTION = 8,
-  WASM_ELEMENT_SECTION = 9,
-  WASM_CODE_SECTION = 10,
-  WASM_DATA_SECTION = 11
-}wasm_section;
-
-typedef enum WASM_TYPE{
-  WASM_TYPE_BLOCK_EMPTY = 0x40,
-  WASM_TYPE_F64 = 0x7C,
-  WASM_TYPE_F32 = 0x7D,
-  WASM_TYPE_I64 = 0x7E,
-  WASM_TYPE_I32 = 0x7F
-}wasm_type;
-
-typedef enum WASM_IMPORT_TYPE{
-  WASM_IMPORT_FUNC = 0,
-  WASM_IMPORT_TABLE = 1,
-  WASM_IMPORT_MEM = 2,
-  WASM_IMPORT_GLOBAL =3
-}wasm_import_type;
-
-
-typedef enum WASM_FUNCTION_TYPE{
-  WASM_FUNCTION_TYPE_IMPORT = 2,
-}wasm_function_type;
-
-typedef struct{
-  void * code;
-  size_t length;
-  const char * name;
-  const char * module;
-  int type;
-  u32 argcount;
-  u32 retcount;
-  wasm_function_type functype;
-  size_t code_offset;
-}wasm_function;
-
-typedef struct{
-  int argcount;
-  int retcount; // 0 or 1.
-}wasm_ftype;
-
-typedef struct{
-  void * heap;
-  size_t capacity;
-}wasm_heap;
-
-
-struct _wasm_module{
-  wasm_function * func;
-  size_t func_count;
-  size_t import_func_count;
-  size_t local_func_count;
-
-  wasm_ftype * types;
-  size_t type_count;
-  
-  size_t global_heap_location;
-  wasm_heap * heap;
-
-  u32 * import_table;
-  size_t import_table_count;
-
-  u64 * globals;
-  size_t global_count;
-
-  wasm_execution_stack ** stacks;
-  u32 stack_count;
-
-  u64 steps_per_context_switch;
-  u64 steps_executed;
-
-  u64 current_stack;
-
-  // debug
-  breakcheck_callback * breakcheck;
-  void ** breakcheck_context;
-  size_t breakcheck_count;
-  bool enabled_breakchecks;
-  u8 * dwarf_debug_lines;
-  size_t dwarf_debug_lines_size;
-  
-};
-
-void wasm_fork_stack(wasm_execution_stack * ctx);
 
 static void wasm_heap_min_capacity(wasm_heap * heap, size_t capacity){
   if(heap->capacity < capacity){
@@ -220,7 +99,6 @@ static size_t wasm_module_add_func(wasm_module * module){
   module->func[module->func_count - 1] = (wasm_function){0};
   return module->func_count - 1;
 }
-
 
 // todo: Many of these operations can be optimized, by modifying the top of the stack in-place.
 
@@ -274,35 +152,29 @@ static size_t wasm_module_add_func(wasm_module * module){
 #define CONVERT_TO_F64(x) (f64)x
 #define UNSUPPORTED_OP(name){ ERROR("Unsupported operation\n"); } break;
 
-typedef struct{
-  u8 * data;
-  size_t offset;
-  size_t size;
-}wasm_code_reader;
-
-static void reader_advance(wasm_code_reader * rd, size_t bytes){
+void reader_advance(wasm_code_reader * rd, size_t bytes){
   ASSERT(rd->offset + bytes <= rd->size);
   rd->offset += bytes;
 }
 
-static u8 reader_read1(wasm_code_reader * rd){
+u8 reader_read1(wasm_code_reader * rd){
   u8 b = rd->data[rd->offset];
   reader_advance(rd, 1);
   return b;
 }
 
-static u8 reader_peek1(wasm_code_reader * rd){
+u8 reader_peek1(wasm_code_reader * rd){
   u8 b = rd->data[rd->offset];
   return b;
 }
 
-static void reader_read(wasm_code_reader * rd, void * buffer, size_t len){
+void reader_read(wasm_code_reader * rd, void * buffer, size_t len){
   ASSERT(rd->offset + len <= rd->size);
   memcpy(buffer, rd->data + rd->offset, len);
   reader_advance(rd, len);
 }
 
-static u64 reader_readu64(wasm_code_reader * rd){
+u64 reader_readu64(wasm_code_reader * rd){
   // read LEB128
   u8 chunk = 0;
   u64 value = 0;
@@ -329,37 +201,37 @@ u32 encode_u64_leb(u64 value, u8 * buffer){
   return buffer - b1;
 }
 
-static u32 reader_readu32(wasm_code_reader * rd){
+u32 reader_readu32(wasm_code_reader * rd){
   return reader_readu64(rd);
 }
 
-static u32 reader_readu32_fixed(wasm_code_reader * rd){
+u32 reader_readu32_fixed(wasm_code_reader * rd){
   u32 value;
   reader_read(rd, &value, sizeof(value));
   return value;
 }
 
-static u16 reader_readu16_fixed(wasm_code_reader * rd){
+u16 reader_readu16_fixed(wasm_code_reader * rd){
   u16 value;
   reader_read(rd, &value, sizeof(value));
   return value;
 }
 
 
-static f32 reader_readf32(wasm_code_reader * rd){
+f32 reader_readf32(wasm_code_reader * rd){
   f32 v = 0;
   memcpy(&v, rd->data + rd->offset, sizeof(v));
   reader_advance(rd, sizeof(v));
   return v;
 }
 
-static f64 reader_readf64(wasm_code_reader * rd){
+f64 reader_readf64(wasm_code_reader * rd){
   f64 v = 0;
   reader_read(rd, &v, sizeof(v));
   return v;
 }
 
-static i64 reader_readi64(wasm_code_reader * rd) {
+i64 reader_readi64(wasm_code_reader * rd) {
     // read LEB128
   i64 value = 0;
   u32 shift = 0;
@@ -374,15 +246,15 @@ static i64 reader_readi64(wasm_code_reader * rd) {
   return value;
 }
 
-static i32 reader_readi32(wasm_code_reader * rd){
+i32 reader_readi32(wasm_code_reader * rd){
   return (i32)reader_readi64(rd);
 }
 
-static size_t reader_getloc(wasm_code_reader * rd){
+size_t reader_getloc(wasm_code_reader * rd){
   return rd->offset;
 }
   
-static char * reader_readname(wasm_code_reader * rd){
+char * reader_readname(wasm_code_reader * rd){
   u32 len = reader_readu32(rd);
   char * buffer = alloc(len + 1);
   reader_read(rd, buffer, len);
@@ -864,45 +736,6 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
   
   return mem_clone(&module, sizeof(module));
 }
-
-typedef struct{
-  i32 block;
-  u32 label_offset;
-  u32 stack_pos;
-  u32 localcount;
-  u32 retcount;
-  int func_id;
-  //u32 argcount;
-  wasm_code_reader rd;
-}wasm_control_stack_frame;
-
-typedef struct{
-  u32 type;
-  u32 offset;
-}wasm_label;
-
-// everything on the wasm execution stack is a 64bit value.
-struct _wasm_execution_stack{
-  u64 * stack;
-  size_t stack_capacity;
-  size_t stack_ptr;
-  
-  wasm_control_stack_frame * frames;
-  u32 frame_capacity;
-  u32 frame_ptr;
-
-  wasm_label * labels;
-  u32 label_capacity;
-    
-  wasm_module * module;
-
-  u8 * initializer;
-  bool complex_state;
-  bool yield;
-  bool keep_alive;
-  
-  char * error;
-};
 
 void wasm_execution_stack_keep_alive(wasm_execution_stack * trd, bool keep_alive){
   trd->keep_alive = keep_alive;
@@ -2341,255 +2174,6 @@ int awsm_debug_location(wasm_execution_stack * ctx){
   wasm_control_stack_frame * f = ctx->frames + ctx->frame_ptr;
   wasm_code_reader * rd = &f->rd;
   return rd->offset;
-}
-
-typedef struct{
-  u32 column, line, address, op_index, prev_line;
-  
-  bool prologue_end, is_stmt;
-  
-  bool default_is_stmt;
-  u8 minimum_instr_length;
-  u8 maxmium_ops_per_instr;
-  i8 line_base;
-  u8 line_range;
-  u32 file;
-
-  const u8 * files;
-  
-}dwarf_debug_line_state_machine;
-
-void dwarf_debug_line_state_machine_reset(dwarf_debug_line_state_machine * sm, bool address){
-  sm->column = 0;
-  sm->line = 1;
-  sm->op_index = 0;
-  sm->prologue_end = true;
-  sm->is_stmt = sm->default_is_stmt;
-  if(address){
-    sm->address = 0;
-    sm->file = 1;
-  }
-}
-
-void dwarf_debug_line_advance(dwarf_debug_line_state_machine * sm, i32 amount, bool incr_line){
-  u32 advance = amount / sm->line_range;
-  u32 new_address = sm->address + (sm->op_index + advance) / sm->maxmium_ops_per_instr;
-  u32 new_op_index = (sm->op_index + advance) % sm->maxmium_ops_per_instr;
-  
-  sm->address = new_address;
-  sm->op_index = new_op_index;
-  if(incr_line){
-    sm->prev_line = sm->line;
-    u32 line_increment = sm->line_base + (amount % sm->line_range);
-    sm->line += line_increment;
-  }
-}
-
-bool dwarf_debug_line_commit_row(dwarf_debug_line_state_machine * sm, u32 code_offset, char * out_filename, int * out_line){
-  UNUSED(out_filename);
-  //printf("             ROW: %x %i %i    %i %i\n", sm->address, sm->line, sm->column,  sm->prologue_end, sm->is_stmt);
-
-  if(code_offset <= sm->address){
-    const u8 * file = sm->files;
-    for(u32 i = 0; i < sm->file - 1; i++){
-      while(*file != 0){
-	file = file + 1;
-      }
-    }
-    strcpy(out_filename, (char *) file);
-
-    
-    *out_line = sm->prev_line;
-    return true;
-  }
-  return false;
-}
-
-int dwarf_source_location(u8 * dwarf_code, u32 code_size, u32 code_offset, char * out_filename, int * out_line){
-  wasm_code_reader _rd = { .data = dwarf_code, .offset = 0, .size = code_size};
-  wasm_code_reader * rd = &_rd;
-  
-  dwarf_debug_line_state_machine sm = {0};
-  //reader_read1(rd);
-  u32 length = reader_readu32_fixed(rd);
-  u16 version = reader_readu16_fixed(rd);
-  ASSERT(version == 4);
-  u32 prolog_length = reader_readu32_fixed(rd);
-  UNUSED(prolog_length);
-  UNUSED(length);
-  sm.minimum_instr_length = reader_read1(rd);
-  sm.maxmium_ops_per_instr = reader_read1(rd);
-  sm.default_is_stmt = reader_read1(rd);
-  sm.line_base = (i8)reader_read1(rd);
-  sm.line_range = reader_read1(rd);
-  u8 opcode_base = reader_read1(rd);
-  u32 opcode_lengths[opcode_base];
-  opcode_lengths[0] = 0;
-  for(u8 i = 1 ;i < opcode_base; i++){
-    opcode_lengths[i] = reader_readu32(rd);
-  }
-  UNUSED(opcode_lengths);
-  UNUSED(version);
-  
-  //printf("DWARF %i %i %i %i %i %i\n", length, code_size, version, prolog_length, sm.minimum_instr_length, sm.maxmium_ops_per_instr);
-  //printf("      %i %i %i %i \n" ,sm.default_is_stmt, sm.line_base, sm.line_range, opcode_base);
-  //printf("\n      ");
-  //for(u8 i = 0; i < opcode_base; i++){
-  //  printf( "%i ", opcode_lengths[i]);
-  //}
-  //printf("\n");
-  while(true){
-    // read the dir names  ( unused )x;
-    u8 check = reader_read1(rd);
-    if(check == 0)
-      break;
-    while(reader_read1(rd) != 0){  }
-  }
-
-  u8 * file_start;
-  file_start = rd->data + rd->offset;
-  
-  while(true){
-    // read the file names ( unused )
-    u8 check = reader_read1(rd);
-    if(check == 0){
-
-      break;
-    }
-    while(reader_read1(rd) != 0){
-
-    }
-    //u32 offset2 = rd->offset;
-
-    u32 dir = reader_readu32(rd);
-    u32 modified = reader_readu32(rd);
-    u32 filelen = reader_readu32(rd);
-    UNUSED(dir);UNUSED(modified);UNUSED(filelen);
-    //printf("FILE: %s %i %i %i\n", rd->data + offset1, dir, modified, filelen);
-  }
-
-  //u32 opcode = (1 - line_base) + (line_range * 1) + opcode_base;
-  //printf("opcode: %i\n", opcode - opcode_base);
-
-
-  dwarf_debug_line_state_machine_reset(&sm, true);
-  sm.files = file_start;
-  
-  //u32 column =0, line = 1, address = 0, op_index = 0;;
-  //bool prologue_end = true, is_stmt = default_is_stmt;
-  bool end = false;
-  for(int i = 0; i < 100000; i++){
-    if(rd->offset ==rd->size || end)
-      break;
-    u8 opcode = reader_read1(rd);
-    //printf("opcode %i\n", opcode);
-    
-    switch(opcode){
-    case 0: // extended opcode
-      {
-	u32 len = reader_readu32(rd);
-	u8 code = reader_read1(rd);
-
-	switch(code){
-	case 0:
-	  printf("ERROR!!\n");
-	  break;
-	  case 1: //DW_LNE_end_sequence
-	    {
-	      end = dwarf_debug_line_commit_row(&sm, code_offset, out_filename, out_line);
-	      dwarf_debug_line_state_machine_reset(&sm, false);
-	      break;
-	    }
-	    
-	case 2: //DW_LNE_set_address  
-	  {
-	    u32 addr = reader_readu32_fixed(rd);
-	    //printf("SET ADDRESS: %i\n", addr);
-	    sm.address = addr;
-	    sm.op_index = 0;
-	    break;
-	  }
-	  
-	case 3: //DW_LNE_define_file 
-	  {
-	    
-	    break;
-	  }
-	case 4:{ // DW_LNE_set_discriminator
-	  
-	  break;
-	}
-	default:{
-	  ERROR("Unsupported extended opcode %i\n", code);
-	  break;
-
-	}
-	}
-	UNUSED(len);
-	//printf("EXT: %i %i\n", len, code);
-	break;
-      }
-    case 1: //DW_LNS_copy
-      {
-	end = dwarf_debug_line_commit_row(&sm, code_offset, out_filename, out_line);
-	sm.prologue_end = false;
-	break;
-      }
-    case 2: // advance pc
-      {
-
-	u32 adjusted = reader_readu32(rd);
-	dwarf_debug_line_advance(&sm, adjusted, false);
-	break;
-      }
-
-    case 3: //Advance Line
-      {
-	i32 count = reader_readi32(rd);
-	sm.line += count;
-	break;
-      }
-    case 5: //DW_LNS_set_column
-      {
-	sm.column = reader_readu32(rd);
-	break;
-      }
-    case 6:{ //negate stmt
-      sm.is_stmt = !sm.is_stmt;
-      break;
-    }
-
-    case 8:{ //DW_LNS_const_add_pc 
-
-	dwarf_debug_line_advance(&sm, 255, false);
-	break;
-    }
-
-    case 10: // set prologue end
-      {
-	sm.prologue_end = true;
-	break;
-      }
-    default:
-
-      if(opcode > opcode_base){
-	u32 adjusted = opcode - opcode_base;
-	dwarf_debug_line_advance(&sm, adjusted, true);
-	end = dwarf_debug_line_commit_row(&sm, code_offset, out_filename, out_line);
-	sm.prologue_end = false;
-      }
-      else{
-	ERROR("ERR");
-      }
-      break;
-
-    }
-    if(end)
-      break;
-  }
-
-  if(end) return 0;
-  return 1;
 }
 
 int awsm_debug_source_address(wasm_execution_stack * ctx){
