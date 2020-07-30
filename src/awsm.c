@@ -2253,7 +2253,7 @@ void writer_write_u64(data_writer * wd, u64 value){ writer_write(wd, &value, siz
 void writer_write_i32(data_writer * wd, i32 value){ writer_write(wd, &value, sizeof(value));}
 
 
-// -- Saving and load VM state. -- \\
+// -- Saving and load VM state. -- 
 
 // markerthing is used for checking sanity during load
 u32 markerthing = 0x00BEEF00;
