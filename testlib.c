@@ -1,5 +1,8 @@
 //compile with clang: clang-9 --target=wasm32 -nostdlib -Wl,--export-all -Wl,--no-entry -O3 -Wl,-no-gc-sections testlib2.c -Wl,--allow-undefined  -o testlib3.wasm 
-
+// asd
+// asd
+// asd
+// asd
 void * get_symbol(const char * module, const char * symbol, unsigned int argcount, unsigned int retcount);
 
 int print_str(const char * x);
@@ -51,14 +54,29 @@ void vec2_print(vec2 v){
 }
 
 void subthing(){
-  print_i32(fib(15));
+  print_i32(fib(5));
   print_str("\ncalc!\n");
 }
 
 int main(){
-  print_str("Hello World!");
+  print_str("Hello World 0!\n");
+  print_str("Hello World 1!\n");
+  print_str("Hello World 2!\n");
+  print_str("Hello World 3!\n");
+  //subthing();
+  //asd
+  subthing();
   return 0;
 }
+
+
+
+
+
+void _main(){
+  print_str("Hello World!");
+}
+
 
 int test_main(){
   vec2 v = vec2_new(1.0, -1.5);

@@ -6,6 +6,7 @@ typedef struct _wasm_execution_stack wasm_execution_stack;
 wasm_module * awsm_load_module_from_file(const char * wasm_file);
 bool awsm_process(wasm_module * module, uint64_t steps_total);
 wasm_execution_stack * awsm_load_thread(wasm_module * module, const char * func);
+wasm_execution_stack * awsm_load_thread_arg(wasm_module * module, const char * func, uint32_t arg);
 
 void awsm_set_error_callback(void (*f)(const char * file, int line, const char * msg, ...));
 
@@ -32,8 +33,33 @@ void awsm_diagnostic(bool diagnostic_level_enabled);
 
 
 int awsm_get_function(wasm_module * module, const char * name);
+int awsm_get_function_ret_cnt(wasm_module * module, int id);
+int awsm_get_function_arg_cnt(wasm_module * module, int id);
+
 int awsm_define_function(wasm_module * module, const char * name, void * len, size_t l, int retcnt, int argcnt);
 void wasm_execution_stack_keep_alive(wasm_execution_stack * trd, bool keep_alive);
 void awsm_thread_keep_alive(wasm_execution_stack * s, int keep_alive);
 size_t awsm_new_global(wasm_module * module);
 void * awsm_module_heap_ptr(wasm_module * mod);
+size_t awsm_heap_size(wasm_module * mod);
+void awsm_heap_increase(wasm_module * mod, size_t amount);
+wasm_module * awsm_stack_module(wasm_execution_stack * s);
+void awsm_module_set_user_data(wasm_module * mod, void * ptr);
+void * awsm_module_get_user_data(wasm_module * mod);
+
+// save/load VM state
+void awsm_module_save_state(wasm_module * mod, void ** buffer, size_t * size);
+void awsm_module_load_state(wasm_module * mod, void * buffer, size_t size);
+
+// Debugging API
+typedef void (* breakcheck_callback)(wasm_execution_stack * stl, void * user_context);
+void * awsm_debug_stack_ptr(wasm_module * mod, uint64_t * size);
+int awsm_debug_next_instr(wasm_execution_stack * stk);
+typedef int breakcheck_id;
+breakcheck_id awsm_debug_attach_breakcheck(wasm_module * mod, breakcheck_callback f, void * user_context);
+void awsm_debug_remove_breakcheck(wasm_module * mod, breakcheck_id id);
+const char * awsm_debug_instr_name(int instr);
+int awsm_debug_location(wasm_execution_stack * ctx);
+const char * awsm_debug_current_function(wasm_execution_stack * ctx);
+int awsm_debug_source_location(wasm_execution_stack * ctx, char * out_filename, int * out_line);
+int awsm_debug_source_address(wasm_execution_stack * ctx);
