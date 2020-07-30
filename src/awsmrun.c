@@ -75,7 +75,10 @@ void print_at_break(wasm_execution_stack * stk, void * ctx){
 
 void read_file_to_buffer(const char * file, void ** buffer, size_t * size){
   FILE *f = fopen(file, "rb");
-  if(f == NULL) return;
+  if(f == NULL) {
+    *size = 0;
+    return;
+  }
   fseek(f, 0, SEEK_END);
   size_t fsize = ftell(f);
   fseek(f, 0, SEEK_SET);  /* same as rewind(f); */
@@ -126,20 +129,24 @@ int main(int argc, char ** argv){
   if(partial){
     
     void * buffer0;
-    size_t size0;
+    size_t size0 = 0;
     read_file_to_buffer("partial.dump", &buffer0, &size0);
     if(size0> 0){
-      
+      awsm_module_load_state(mod, buffer0, size0);
+      free(buffer0);
     }
     
-    awsm_process(mod, 10);
-    void * buffer;
-    size_t size;
-    awsm_module_save_state(mod, &buffer, &size);
-    remove("partial.dump");
-    FILE * f = fopen("partial.dump", "w");
-    fwrite(buffer, size, 1, f);
-    fclose(f);
+    if(awsm_process(mod, 10)){
+      void * buffer;
+      size_t size;
+      awsm_module_save_state(mod, &buffer, &size);
+      remove("partial.dump");
+      FILE * f = fopen("partial.dump", "w");
+      fwrite(buffer, size, 1, f);
+      fclose(f);
+    }else{
+      remove("partial.dump");
+    }
     return 0;
   }
   while(awsm_process(mod, 200)){

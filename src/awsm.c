@@ -205,6 +205,19 @@ u32 reader_readu32(wasm_code_reader * rd){
   return reader_readu64(rd);
 }
 
+u64 reader_readu64_fixed(wasm_code_reader * rd){
+  u64 value;
+  reader_read(rd, &value, sizeof(value));
+  return value;
+}
+
+
+i32 reader_readi32_fixed(wasm_code_reader * rd){
+  i32 value;
+  reader_read(rd, &value, sizeof(value));
+  return value;
+}
+
 u32 reader_readu32_fixed(wasm_code_reader * rd){
   u32 value;
   reader_read(rd, &value, sizeof(value));
@@ -385,7 +398,6 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
 	  reader_read(rd, buffer, sectionlen);
 	  module.dwarf_debug_lines = buffer;
 	  module.dwarf_debug_lines_size = sectionlen;
-	  printf("DEBUG LINE\n");
 	}else{
 	  reader_advance(rd,length - namelen);
 	}
@@ -2241,7 +2253,13 @@ void writer_write_u64(data_writer * wd, u64 value){ writer_write(wd, &value, siz
 void writer_write_i32(data_writer * wd, i32 value){ writer_write(wd, &value, sizeof(value));}
 
 
+// -- Saving and load VM state. -- \\
+
+// markerthing is used for checking sanity during load
+u32 markerthing = 0x00BEEF00;
+
 void frame_save(data_writer * wd, wasm_control_stack_frame * f, stack * stk){
+  writer_write_u32(wd, markerthing);
   writer_write_i32(wd, f->block);
   writer_write_u32(wd, f->label_offset);
   writer_write_u32(wd, f->stack_pos);
@@ -2279,23 +2297,36 @@ void frame_save(data_writer * wd, wasm_control_stack_frame * f, stack * stk){
 }
 
 void stack_save(data_writer * wd, stack * stk){
+  writer_write_u32(wd, markerthing);
   writer_write_u32(wd, stk->stack_ptr);  
-  writer_write(wd, stk->stack, stk->stack_ptr * sizeof(stk->stack[0]));
+  writer_write(wd, stk->stack, (stk->stack_ptr + 1) * sizeof(stk->stack[0]));
+
+  writer_write_u32(wd, stk->initializer_size);
+  writer_write(wd, stk->initializer, stk->initializer_size);
+  
   writer_write_u32(wd, stk->frame_ptr);
-  for(u32 i = 0; i < stk->frame_ptr; i++)
+
+  for(u32 i = 0; i <= stk->frame_ptr; i++)
     frame_save(wd, stk->frames + i, stk);
   writer_write_u32(wd, stk->label_capacity);
   writer_write(wd, stk->labels, stk->label_capacity * sizeof(stk->labels[0]));
-  writer_write_u32(wd, stk->initializer_size);
-  writer_write(wd, stk->initializer, stk->initializer_size);
+
   writer_write_u8(wd, stk->keep_alive);
   // keep_alive?
 }
 
 void module_save(data_writer * wd, wasm_module * mod){
-  writer_write_u32(wd, mod->stack_count);
+  writer_write_u32(wd, markerthing);
+
+  u32 stkcnt = 0;
   for(u32 i = 0 ; i < mod->stack_count; i++){
-    stack_save(wd, mod->stacks[i]);
+    if(mod->stacks[i] != NULL)
+      stkcnt += 1;
+  }
+  writer_write_u32(wd, stkcnt);
+  for(u32 i = 0 ; i < mod->stack_count; i++){
+    if(mod->stacks[i] != NULL)
+      stack_save(wd, mod->stacks[i]);
   }
   writer_write_u32(wd, mod->global_count);
   writer_write(wd, mod->globals, mod->global_count * sizeof(u64));
@@ -2312,4 +2343,84 @@ void awsm_module_save_state(wasm_module * mod, void ** buffer, size_t * size){
   module_save(&writer, mod);
   *buffer = writer.data;
   *size = writer.offset;
+}
+
+void frame_load(data_reader * rd, wasm_control_stack_frame * f, stack * stk){
+  ASSERT(reader_readu32_fixed(rd) == markerthing);
+  f->block = reader_readi32_fixed(rd);
+  f->label_offset = reader_readu32_fixed(rd);
+  f->stack_pos = reader_readu32_fixed(rd);
+  f->localcount = reader_readu32_fixed(rd);
+  f->retcount = reader_readu32_fixed(rd);
+  f->func_id = reader_readi32_fixed(rd);
+
+  u8 type = reader_read1(rd);
+  u32 offset = reader_readu32_fixed(rd);
+  wasm_code_reader * rd2 = &f->rd;
+
+  if(type == 0){
+    rd2->data = stk->initializer;
+    rd2->offset = offset;
+    rd2->size = stk->initializer_size;
+  }else if(type == 2){
+    wasm_function * f2 = stk->module->func + f->func_id;
+    rd2->data = f2->code;
+    rd2->size = f2->length;
+    rd2->offset = offset;
+  }else if(type == 1){
+    ERROR("UNSUPPORTED\n");
+
+  }
+}
+
+void stack_load(data_reader * rd, stack * stk){
+  ASSERT(reader_readu32_fixed(rd) == markerthing);
+  stk->stack_ptr = reader_readu32_fixed(rd);
+  stk->stack_capacity = stk->stack_ptr + 1;
+  stk->stack = realloc(stk->stack, sizeof(stk->stack[0]) * stk->stack_capacity);
+
+  reader_read(rd, stk->stack, (stk->stack_ptr + 1) * sizeof(stk->stack[0]));
+
+  stk->initializer_size = reader_readu32_fixed(rd);
+  stk->initializer = realloc(stk->initializer, stk->initializer_size);
+  reader_read(rd, stk->initializer, stk->initializer_size);
+  
+  stk->frame_ptr = reader_readu32_fixed(rd);
+  stk->frame_capacity = stk->frame_ptr + 1;
+  stk->frames = realloc(stk->frames, stk->frame_capacity * sizeof(stk->frames[0]));
+  for(u32 i = 0; i <= stk->frame_ptr; i++)
+    frame_load(rd, stk->frames + i, stk);
+
+  stk->label_capacity = reader_readu32_fixed(rd);
+  stk->labels = realloc(stk->labels, stk->label_capacity * sizeof(stk->labels[0]));
+  reader_read(rd, stk->labels, stk->label_capacity * sizeof(stk->labels[0]));
+
+  stk->keep_alive = (bool)reader_read1(rd);
+
+}
+
+void module_load(data_reader * rd, wasm_module * mod){
+  ASSERT(reader_readu32_fixed(rd) == markerthing);
+  u32 stack_count = reader_readu32_fixed(rd);
+  mod->stacks = realloc(mod->stacks, stack_count * sizeof(mod->stacks[0]));
+  mod->stack_count = stack_count;
+  for(u32 i = 0; i < stack_count; i++){
+    stack_load(rd, mod->stacks[i]);
+  }
+  u32 global_count = reader_readu32_fixed(rd);
+  if(global_count != mod->global_count)
+    ERROR("Global count seems wrong!!\n");
+  mod->globals = realloc(mod->globals, sizeof(mod->globals[0]) * mod->global_count);
+  reader_read(rd, mod->globals, global_count * sizeof(mod->globals[0]));
+  mod->heap->capacity = reader_readu64_fixed(rd);
+  mod->heap->heap = realloc(mod->heap->heap, mod->heap->capacity);
+  reader_read(rd, mod->heap->heap, mod->heap->capacity);
+  ASSERT(rd->offset == rd->size);
+
+}
+
+void awsm_module_load_state(wasm_module * mod, void * buffer, size_t size){
+  // loads the heap and the execution stack.
+  data_reader reader = {.data = buffer, .size = size, .offset = 0};
+  module_load(&reader, mod);
 }
