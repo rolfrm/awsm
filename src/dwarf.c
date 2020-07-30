@@ -9,7 +9,6 @@
 #include "awsm.h"
 #include "awsm_internal.h"
 
-
 void dwarf_debug_line_state_machine_reset(dwarf_debug_line_state_machine * sm, bool address){
   sm->column = 0;
   sm->line = 1;

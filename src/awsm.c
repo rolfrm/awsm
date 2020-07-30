@@ -158,13 +158,13 @@ void reader_advance(wasm_code_reader * rd, size_t bytes){
 }
 
 u8 reader_read1(wasm_code_reader * rd){
-  u8 b = rd->data[rd->offset];
+  u8 b = ((u8 *)(rd->data + rd->offset))[0];
   reader_advance(rd, 1);
   return b;
 }
 
 u8 reader_peek1(wasm_code_reader * rd){
-  u8 b = rd->data[rd->offset];
+  u8 b = ((u8 *)(rd->data + rd->offset))[0];
   return b;
 }
 
@@ -1726,6 +1726,7 @@ void wasm_fork_stack(wasm_execution_stack * init_ctx){
   wasm_push_i32(ctx, 1);
   wasm_push_i32(init_ctx, 0);
   ctx->initializer = NULL; // no initialization was done here. Reset it to avoid double free.
+  ctx->initializer_size = 0;
 }
 
 void wasm_delete_stack(wasm_execution_stack * stk){
@@ -1736,6 +1737,7 @@ void wasm_delete_stack(wasm_execution_stack * stk){
   if(stk->initializer != NULL)
     dealloc(stk->initializer);
   dealloc(stk);
+  stk->initializer_size = 0;
 }
 
 int wasm_exec_code3(wasm_execution_stack * ctx, u8 * code, size_t l, u32 steps){
@@ -1779,8 +1781,6 @@ int awsm_get_function_arg_cnt(wasm_module * module, int id){
 int awsm_get_function_ret_cnt(wasm_module * module, int id){
   return module->func[id].retcount;
 }
-
-
 
 int awsm_define_function(wasm_module * module, const char * name, void * code, size_t len, int retcount, int argcount){
   int j = awsm_get_function(module, name);
@@ -1916,6 +1916,7 @@ void _new_coroutine(stack * ctx){
   code[0] = WASM_INSTR_CALL_INDIRECT;
   //u32 len = encode_u64_leb((u64)fcn, code + 1);
   ctx2->initializer = code;
+  ctx2->initializer_size = 16;
 
   wasm_push_u64(ctx2, val);
   wasm_push_u64(ctx2, fcn);
@@ -2034,7 +2035,7 @@ stack * awsm_load_thread_arg(wasm_module * module, const char * func, u32 arg){
   offset += ret_cnt;
   
   ctx->initializer = mem_clone(code, offset);
-
+  ctx->initializer_size = offset;
   wasm_load_code(ctx, ctx->initializer, offset);
   return ctx;
 }
@@ -2224,3 +2225,91 @@ const char * awsm_debug_instr_name(int instr){
 }
 
 
+
+void writer_write(data_writer * writer, void * data, size_t count){
+  if(writer->offset + count > writer->size){
+    size_t newsize = (writer->size + count) * 1.2;
+    writer->data = realloc(writer->data, newsize);
+    writer->size = newsize;
+  }
+  memcpy(writer->data + writer->offset, data, count);
+  writer->offset += count;
+}
+void writer_write_u8(data_writer * wd, u8 value){ writer_write(wd, &value, sizeof(value));}
+void writer_write_u32(data_writer * wd, u32 value){ writer_write(wd, &value, sizeof(value));}
+void writer_write_u64(data_writer * wd, u64 value){ writer_write(wd, &value, sizeof(value));}
+void writer_write_i32(data_writer * wd, i32 value){ writer_write(wd, &value, sizeof(value));}
+
+
+void frame_save(data_writer * wd, wasm_control_stack_frame * f, stack * stk){
+  writer_write_i32(wd, f->block);
+  writer_write_u32(wd, f->label_offset);
+  writer_write_u32(wd, f->stack_pos);
+  writer_write_u32(wd, f->localcount);
+  writer_write_u32(wd, f->retcount);
+  writer_write_i32(wd, f->func_id);
+  wasm_code_reader rd = f->rd;
+
+  if(rd.data >= stk->initializer && rd.data <= stk->initializer + stk->initializer_size){
+    // executing initializer code.
+    writer_write_u8(wd, 0);
+    writer_write_u32(wd, rd.offset);
+  }else{
+
+    if(f->func_id >= 0){
+      // Executing a function.
+      writer_write_u8(wd, 2);
+      writer_write_u32(wd, rd.offset);
+    }else{
+      wasm_heap * heap = stk->module->heap;
+      // printf("%p %p %i\n", rd.data, heap->heap,
+    if(rd.data >= heap->heap && rd.data < heap->heap + heap->capacity){
+      // executing code directly from the heap.
+      writer_write_u8(wd, 1);
+      writer_write_u32(wd, rd.offset);
+    }
+    else{
+      ERROR("Unknown function type, cannot save!\n");
+
+    }
+    }
+
+  }
+
+}
+
+void stack_save(data_writer * wd, stack * stk){
+  writer_write_u32(wd, stk->stack_ptr);  
+  writer_write(wd, stk->stack, stk->stack_ptr * sizeof(stk->stack[0]));
+  writer_write_u32(wd, stk->frame_ptr);
+  for(u32 i = 0; i < stk->frame_ptr; i++)
+    frame_save(wd, stk->frames + i, stk);
+  writer_write_u32(wd, stk->label_capacity);
+  writer_write(wd, stk->labels, stk->label_capacity * sizeof(stk->labels[0]));
+  writer_write_u32(wd, stk->initializer_size);
+  writer_write(wd, stk->initializer, stk->initializer_size);
+  writer_write_u8(wd, stk->keep_alive);
+  // keep_alive?
+}
+
+void module_save(data_writer * wd, wasm_module * mod){
+  writer_write_u32(wd, mod->stack_count);
+  for(u32 i = 0 ; i < mod->stack_count; i++){
+    stack_save(wd, mod->stacks[i]);
+  }
+  writer_write_u32(wd, mod->global_count);
+  writer_write(wd, mod->globals, mod->global_count * sizeof(u64));
+  writer_write_u64(wd, mod->heap->capacity);
+  writer_write(wd, mod->heap->heap, mod->heap->capacity);
+}
+
+void awsm_module_save_state(wasm_module * mod, void ** buffer, size_t * size){
+  // saves the heap and the execution stack.
+  // assumes the module after load will be the same, so func related things are not touched
+  // the global values are saved though.
+  // [execution stacks]
+  data_writer writer = {.data = NULL, .size = 0, .offset = 0};
+  module_save(&writer, mod);
+  *buffer = writer.data;
+  *size = writer.offset;
+}

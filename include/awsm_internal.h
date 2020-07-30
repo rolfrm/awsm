@@ -89,7 +89,7 @@ struct _wasm_module{
   size_t import_table_count;
 
   u64 * globals;
-  size_t global_count;
+  u32 global_count;
 
   wasm_execution_stack ** stacks;
   u32 stack_count;
@@ -111,26 +111,12 @@ struct _wasm_module{
 
 
 typedef struct{
-  u8 * data;
+  // data can either be from the stack initializer code
+  // the module code, or the module heap
+  void * data;
   size_t offset;
   size_t size;
 }wasm_code_reader;
-
-void reader_advance(wasm_code_reader * rd, size_t bytes);
-u8 reader_read1(wasm_code_reader * rd);
-u8 reader_peek1(wasm_code_reader * rd);
-void reader_read(wasm_code_reader * rd, void * buffer, size_t len);
-u64 reader_readu64(wasm_code_reader * rd);
-u32 reader_readu32(wasm_code_reader * rd);
-u32 reader_readu32_fixed(wasm_code_reader * rd);
-u16 reader_readu16_fixed(wasm_code_reader * rd);
-f32 reader_readf32(wasm_code_reader * rd);
-f64 reader_readf64(wasm_code_reader * rd);
-i64 reader_readi64(wasm_code_reader * rd);
-i32 reader_readi32(wasm_code_reader * rd);
-size_t reader_getloc(wasm_code_reader * rd);
-char * reader_readname(wasm_code_reader * rd);
-
 
 typedef struct{
   i32 block;
@@ -151,8 +137,8 @@ typedef struct{
 // everything on the wasm execution stack is a 64bit value.
 struct _wasm_execution_stack{
   u64 * stack;
-  size_t stack_capacity;
-  size_t stack_ptr;
+  u32 stack_capacity;
+  u32 stack_ptr;
   
   wasm_control_stack_frame * frames;
   u32 frame_capacity;
@@ -163,7 +149,8 @@ struct _wasm_execution_stack{
     
   wasm_module * module;
 
-  u8 * initializer;
+  void * initializer;
+  u32 initializer_size;
   bool complex_state;
   bool yield;
   bool keep_alive;
@@ -174,6 +161,26 @@ struct _wasm_execution_stack{
 void wasm_fork_stack(wasm_execution_stack * ctx);
 
 
+
+typedef wasm_code_reader data_writer;
+
+void reader_advance(wasm_code_reader * rd, size_t bytes);
+u8 reader_read1(wasm_code_reader * rd);
+u8 reader_peek1(wasm_code_reader * rd);
+void reader_read(wasm_code_reader * rd, void * buffer, size_t len);
+u64 reader_readu64(wasm_code_reader * rd);
+u32 reader_readu32(wasm_code_reader * rd);
+u32 reader_readu32_fixed(wasm_code_reader * rd);
+u16 reader_readu16_fixed(wasm_code_reader * rd);
+f32 reader_readf32(wasm_code_reader * rd);
+f64 reader_readf64(wasm_code_reader * rd);
+i64 reader_readi64(wasm_code_reader * rd);
+i32 reader_readi32(wasm_code_reader * rd);
+size_t reader_getloc(wasm_code_reader * rd);
+char * reader_readname(wasm_code_reader * rd);
+
+
+// debug
 
 typedef struct{
   u32 column, line, address, op_index, prev_line;

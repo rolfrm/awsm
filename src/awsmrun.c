@@ -73,12 +73,26 @@ void print_at_break(wasm_execution_stack * stk, void * ctx){
   }
 }
 
+void read_file_to_buffer(const char * file, void ** buffer, size_t * size){
+  FILE *f = fopen(file, "rb");
+  if(f == NULL) return;
+  fseek(f, 0, SEEK_END);
+  size_t fsize = ftell(f);
+  fseek(f, 0, SEEK_SET);  /* same as rewind(f); */
+  
+  *buffer = malloc(fsize + 1);
+  fread(*buffer, 1, fsize, f);
+  fclose(f);
+  *size = fsize;
+}
+
 int main(int argc, char ** argv){
   awsm_set_error_callback(_error);
   char * file = NULL;
   char * entrypoint = NULL;
   bool diagnostic = false;
   bool debug = false;
+  bool partial = false;
   for(int i = 1; i < argc; i++){
     if(strcmp(argv[i], "--diagnostic") == 0){
       diagnostic = true;
@@ -86,6 +100,10 @@ int main(int argc, char ** argv){
     }
     if(strcmp(argv[i], "--debug") == 0){
       debug = true;
+      continue;
+    }
+    if(strcmp(argv[i], "--partial") == 0){
+      partial = true;
       continue;
     }
     if(file == NULL)
@@ -105,7 +123,25 @@ int main(int argc, char ** argv){
     printf("Unable to load thread");
     return 1;
   }
-  
+  if(partial){
+    
+    void * buffer0;
+    size_t size0;
+    read_file_to_buffer("partial.dump", &buffer0, &size0);
+    if(size0> 0){
+      
+    }
+    
+    awsm_process(mod, 10);
+    void * buffer;
+    size_t size;
+    awsm_module_save_state(mod, &buffer, &size);
+    remove("partial.dump");
+    FILE * f = fopen("partial.dump", "w");
+    fwrite(buffer, size, 1, f);
+    fclose(f);
+    return 0;
+  }
   while(awsm_process(mod, 200)){
   }
   return 0;

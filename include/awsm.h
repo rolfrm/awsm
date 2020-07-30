@@ -47,6 +47,10 @@ wasm_module * awsm_stack_module(wasm_execution_stack * s);
 void awsm_module_set_user_data(wasm_module * mod, void * ptr);
 void * awsm_module_get_user_data(wasm_module * mod);
 
+// save/load VM state
+void awsm_module_save_state(wasm_module * mod, void ** buffer, size_t * size);
+void awsm_module_load_state(wasm_module * mod, void * buffer, size_t size);
+
 // Debugging API
 typedef void (* breakcheck_callback)(wasm_execution_stack * stl, void * user_context);
 void * awsm_debug_stack_ptr(wasm_module * mod, uint64_t * size);
