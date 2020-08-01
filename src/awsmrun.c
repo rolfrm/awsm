@@ -41,9 +41,6 @@ void print_at_break(wasm_execution_stack * stk, void * ctx){
 
     char filename2[100];
     sprintf(filename2, "./%s", filename);
-    //printf("            >>>     %s : %i\n", filename2, line - 1);
-
-
     
     FILE * fp = fopen(filename2, "r");
     if(fp != NULL){
@@ -89,6 +86,16 @@ void read_file_to_buffer(const char * file, void ** buffer, size_t * size){
   *size = fsize;
 }
 
+void read_some(void * data, u64 count, void * ptr){
+  FILE * f = ptr;
+  fread(data, count, 1, f);
+}
+
+
+void write_some(void * data, u64 count, void * ptr){
+  FILE * f = ptr;
+  fwrite(data, count, 1, f);
+}
 int main(int argc, char ** argv){
   awsm_set_error_callback(_error);
   char * file = NULL;
@@ -128,21 +135,19 @@ int main(int argc, char ** argv){
   }
   if(partial){
     
-    void * buffer0;
-    size_t size0 = 0;
-    read_file_to_buffer("partial.dump", &buffer0, &size0);
-    if(size0> 0){
-      awsm_module_load_state(mod, buffer0, size0);
-      free(buffer0);
+
+    FILE * f = fopen("partial.dump", "r");
+    if(f != NULL){
+      data_reader rd = {. f= read_some, .user_data = f};
+      awsm_module_load(&rd, mod);
+      fclose(f);
     }
     
     if(awsm_process(mod, 10)){
-      void * buffer;
-      size_t size;
-      awsm_module_save_state(mod, &buffer, &size);
       remove("partial.dump");
       FILE * f = fopen("partial.dump", "w");
-      fwrite(buffer, size, 1, f);
+      data_writer rd = {. f= write_some, .user_data = f};
+      awsm_module_save(&rd, mod);
       fclose(f);
     }else{
       remove("partial.dump");

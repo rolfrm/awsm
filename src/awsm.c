@@ -153,11 +153,20 @@ static size_t wasm_module_add_func(wasm_module * module){
 #define UNSUPPORTED_OP(name){ ERROR("Unsupported operation\n"); } break;
 
 void reader_advance(wasm_code_reader * rd, size_t bytes){
+  if(rd->f){
+    rd->f(NULL, bytes, rd->user_data);
+    return;
+  }
   ASSERT(rd->offset + bytes <= rd->size);
   rd->offset += bytes;
 }
 
 u8 reader_read1(wasm_code_reader * rd){
+  if(rd->f){
+    u8 r;
+    rd->f(&r, 1, rd->user_data);
+    return r;
+  }
   u8 b = ((u8 *)(rd->data + rd->offset))[0];
   reader_advance(rd, 1);
   return b;
@@ -169,6 +178,10 @@ u8 reader_peek1(wasm_code_reader * rd){
 }
 
 void reader_read(wasm_code_reader * rd, void * buffer, size_t len){
+  if(rd->f){
+    rd->f(buffer, len, rd->user_data);
+    return;
+  }
   ASSERT(rd->offset + len <= rd->size);
   memcpy(buffer, rd->data + rd->offset, len);
   reader_advance(rd, len);
@@ -264,6 +277,7 @@ i32 reader_readi32(wasm_code_reader * rd){
 }
 
 size_t reader_getloc(wasm_code_reader * rd){
+  ASSERT(rd->f == NULL);
   return rd->offset;
 }
   
@@ -274,6 +288,20 @@ char * reader_readname(wasm_code_reader * rd){
   buffer[len] = 0;
   return buffer;
 }
+
+char * reader_read_str(binary_io * io){
+  char * buf = NULL;
+  char c = 0;
+  size_t s = 0;
+  do{
+    c = reader_read1(io);
+    buf = realloc(buf, (s = s + 1));
+    buf[s- 1] = c;
+  }while(c != 0);
+  return buf;
+}
+
+
 
 static wasm_instr move_to_end_of_block(wasm_code_reader * rd, u32 block){
   u32 blk = block;
@@ -1129,17 +1157,18 @@ void standard_error_callback(const char * file, int line, const char * msg, ...)
 int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
   current_stack = ctx;
   ctx->complex_state = ctx->yield || breakcheck_enabled(ctx);
+  ctx->yield = false;
   int startcount = stepcount;
   wasm_control_stack_frame * f = ctx->frames + ctx->frame_ptr;
   wasm_code_reader * rd = &f->rd;
   wasm_module * mod = ctx->module;
   ASSERT(mod);
   while(rd->offset < rd->size && stepcount > 0){
-    if(ctx->complex_state){
-      if(ctx->yield) break;
-      if(breakcheck_enabled(ctx))
-	breakcheck_run(ctx);
-    }
+
+    if(ctx->yield) break;
+    if(breakcheck_enabled(ctx))
+      breakcheck_run(ctx);
+    
 
     stepcount--;
     wasm_instr instr = reader_read1(rd);
@@ -1295,7 +1324,7 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
 	  }
 	  fcn(ctx);
 	  if(ctx->yield){
-	    ctx->yield = false;
+
 	    return startcount - stepcount;
 	  }
 	}else{
@@ -1308,7 +1337,7 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
 	  f->stack_pos = ctx->stack_ptr - fn->argcount;
 	  f->func_id = fcn;
 	  //f->argcount = fn->argcount;
-	  rd[0] = (wasm_code_reader){.data = fn->code, .size = fn->length, .offset = 0};
+	  rd[0] = (wasm_code_reader){.data = fn->code, .size = fn->length, .offset = 0, .f = NULL};
 	  u32 l = reader_readu32(rd);
 	  for(u32 i = 0; i < l; i++){
 	    u32 elemcount = reader_readu32(rd);
@@ -1958,7 +1987,7 @@ wasm_module * awsm_load_module_from_file(const char * wasm_file){
     return NULL;
   }
   wasm_heap * heap = alloc0(sizeof(heap[0]));
-  wasm_code_reader rd = {.data = data, .size = buffer_size, .offset = 0};
+  wasm_code_reader rd = {.data = data, .size = buffer_size, .offset = 0, .f = NULL};
   wasm_module * mod = load_wasm_module(heap, &rd);
   awsm_register_function(mod, _print_i32, "print_i32");
   awsm_register_function(mod, _print_i64, "print_i64");
@@ -1997,7 +2026,8 @@ bool awsm_process(wasm_module * module, u64 steps_total){
 	return false;
     }
     module->current_stack = i;
-    wasm_exec_code2(module->stacks[i], group);    
+    wasm_exec_code2(module->stacks[i], group);
+    bool yield = module->stacks[i]->yield;
     module->steps_executed += group;
     if(module->stacks[i]->keep_alive == false && wasm_stack_is_finalized(module->stacks[i])){
       wasm_delete_stack(module->stacks[i]);
@@ -2005,6 +2035,7 @@ bool awsm_process(wasm_module * module, u64 steps_total){
     }
     module->current_stack += 1;
     if(module->current_stack >= module->stack_count) module->current_stack = 0;
+    if(yield) break;
   }
   return true;
 }
@@ -2079,6 +2110,14 @@ void awsm_push_f32(stack * s, float v){
 void awsm_push_f64(stack * s, double v){
   wasm_push_f64(s, v);
 }
+
+void awsm_push_ptr(stack * ctx, void * ptr){
+  wasm_module * mod = awsm_stack_module(ctx);
+  void * heap = awsm_module_heap_ptr(mod);
+  u32 offset = ptr - heap;
+  awsm_push_u32(ctx, offset);
+}
+
 
 int32_t awsm_pop_i32(stack * s){
   int32_t v;
@@ -2238,7 +2277,11 @@ const char * awsm_debug_instr_name(int instr){
 
 
 
-void writer_write(data_writer * writer, void * data, size_t count){
+void writer_write(data_writer * writer, const void * data, size_t count){
+  if(writer->f){
+    writer->f((void *) data, count, writer->user_data);
+    return;
+  }
   if(writer->offset + count > writer->size){
     size_t newsize = (writer->size + count) * 1.2;
     writer->data = realloc(writer->data, newsize);
@@ -2251,6 +2294,11 @@ void writer_write_u8(data_writer * wd, u8 value){ writer_write(wd, &value, sizeo
 void writer_write_u32(data_writer * wd, u32 value){ writer_write(wd, &value, sizeof(value));}
 void writer_write_u64(data_writer * wd, u64 value){ writer_write(wd, &value, sizeof(value));}
 void writer_write_i32(data_writer * wd, i32 value){ writer_write(wd, &value, sizeof(value));}
+
+void writer_write_str(binary_io * io, const char * str){
+  int len = strlen(str);
+  writer_write(io, str, len + 1);
+}
 
 
 // -- Saving and load VM state. -- 
@@ -2339,13 +2387,18 @@ void awsm_module_save_state(wasm_module * mod, void ** buffer, size_t * size){
   // assumes the module after load will be the same, so func related things are not touched
   // the global values are saved though.
   // [execution stacks]
-  data_writer writer = {.data = NULL, .size = 0, .offset = 0};
+  data_writer writer = {.data = NULL, .size = 0, .offset = 0, .f = NULL};
   module_save(&writer, mod);
   *buffer = writer.data;
   *size = writer.offset;
 }
 
+void awsm_module_save(data_writer * wd, wasm_module * mod){
+  module_save(wd, mod);
+}
+
 void frame_load(data_reader * rd, wasm_control_stack_frame * f, stack * stk){
+  *f = (wasm_control_stack_frame){0};
   ASSERT(reader_readu32_fixed(rd) == markerthing);
   f->block = reader_readi32_fixed(rd);
   f->label_offset = reader_readu32_fixed(rd);
@@ -2357,7 +2410,7 @@ void frame_load(data_reader * rd, wasm_control_stack_frame * f, stack * stk){
   u8 type = reader_read1(rd);
   u32 offset = reader_readu32_fixed(rd);
   wasm_code_reader * rd2 = &f->rd;
-
+  rd2->f = NULL;
   if(type == 0){
     rd2->data = stk->initializer;
     rd2->offset = offset;
@@ -2402,9 +2455,8 @@ void stack_load(data_reader * rd, stack * stk){
 void module_load(data_reader * rd, wasm_module * mod){
   ASSERT(reader_readu32_fixed(rd) == markerthing);
   u32 stack_count = reader_readu32_fixed(rd);
-  mod->stacks = realloc(mod->stacks, stack_count * sizeof(mod->stacks[0]));
-  mod->stack_count = stack_count;
   for(u32 i = 0; i < stack_count; i++){
+    wasm_module_add_stack(mod, alloc0(sizeof(mod->stacks[0][0])));
     stack_load(rd, mod->stacks[i]);
   }
   u32 global_count = reader_readu32_fixed(rd);
@@ -2415,12 +2467,23 @@ void module_load(data_reader * rd, wasm_module * mod){
   mod->heap->capacity = reader_readu64_fixed(rd);
   mod->heap->heap = realloc(mod->heap->heap, mod->heap->capacity);
   reader_read(rd, mod->heap->heap, mod->heap->capacity);
-  ASSERT(rd->offset == rd->size);
+  //ASSERT(rd->offset == rd->size);
 
 }
 
 void awsm_module_load_state(wasm_module * mod, void * buffer, size_t size){
   // loads the heap and the execution stack.
-  data_reader reader = {.data = buffer, .size = size, .offset = 0};
+  data_reader reader = {.data = buffer, .size = size, .offset = 0, .f = 0};
   module_load(&reader, mod);
+}
+
+void awsm_module_load(data_reader * rd, wasm_module * mod){
+  module_load(rd, mod);
+}
+
+void awsm_module_set_user_data(wasm_module * mod, void * ptr){
+  mod->user_data = ptr;
+}
+void * awsm_module_get_user_data(wasm_module * mod){
+  return mod->user_data;
 }

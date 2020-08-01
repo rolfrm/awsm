@@ -72,7 +72,6 @@ typedef struct{
   size_t capacity;
 }wasm_heap;
 
-
 struct _wasm_module{
   wasm_function * func;
   size_t func_count;
@@ -106,17 +105,13 @@ struct _wasm_module{
   bool enabled_breakchecks;
   u8 * dwarf_debug_lines;
   size_t dwarf_debug_lines_size;
+
+  // user data
+  void * user_data;
   
 };
 
 
-typedef struct{
-  // data can either be from the stack initializer code
-  // the module code, or the module heap
-  void * data;
-  size_t offset;
-  size_t size;
-}wasm_code_reader;
 
 typedef struct{
   i32 block;
@@ -159,29 +154,6 @@ struct _wasm_execution_stack{
 };
 
 void wasm_fork_stack(wasm_execution_stack * ctx);
-
-
-
-typedef wasm_code_reader data_writer;
-typedef wasm_code_reader data_reader;
-
-void reader_advance(wasm_code_reader * rd, size_t bytes);
-u8 reader_read1(wasm_code_reader * rd);
-u8 reader_peek1(wasm_code_reader * rd);
-void reader_read(wasm_code_reader * rd, void * buffer, size_t len);
-u64 reader_readu64(wasm_code_reader * rd);
-u32 reader_readu32(wasm_code_reader * rd);
-u64 reader_readu64_fixed(wasm_code_reader * rd);
-u32 reader_readu32_fixed(wasm_code_reader * rd);
-i32 reader_readi32_fixed(wasm_code_reader * rd);
-u16 reader_readu16_fixed(wasm_code_reader * rd);
-f32 reader_readf32(wasm_code_reader * rd);
-f64 reader_readf64(wasm_code_reader * rd);
-i64 reader_readi64(wasm_code_reader * rd);
-i32 reader_readi32(wasm_code_reader * rd);
-size_t reader_getloc(wasm_code_reader * rd);
-char * reader_readname(wasm_code_reader * rd);
-
 
 // debug
 
