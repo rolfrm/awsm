@@ -96,6 +96,8 @@ void write_some(void * data, u64 count, void * ptr){
   FILE * f = ptr;
   fwrite(data, count, 1, f);
 }
+
+
 int main(int argc, char ** argv){
   awsm_set_error_callback(_error);
   char * file = NULL;

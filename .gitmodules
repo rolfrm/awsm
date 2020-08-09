@@ -1,0 +1,3 @@
+[submodule "libmicroio"]
+	path = libmicroio
+	url = git@github.com:rolfrm/libmicroio.git

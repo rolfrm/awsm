@@ -11,6 +11,8 @@ void print_f32(float x);
 //void print_f64(double x);
 void require_i32(int x, int y);
 int awsm_fork();
+void sleep(int ms);
+
 int fib(int n){
   //print_i32(n);
   if(n <2)
@@ -69,6 +71,9 @@ int main(){
   return 0;
 }
 
+void main_sleep(){
+  sleep(1000);
+}
 
 
 

@@ -47,7 +47,7 @@ typedef enum WASM_IMPORT_TYPE{
 
 
 typedef enum WASM_FUNCTION_TYPE{
-  WASM_FUNCTION_TYPE_IMPORT = 2,
+  WASM_FUNCTION_TYPE_IMPORT = 2
 }wasm_function_type;
 
 typedef struct{
@@ -60,6 +60,7 @@ typedef struct{
   u32 retcount;
   wasm_function_type functype;
   size_t code_offset;
+  awsm_fcn_opt options;
 }wasm_function;
 
 typedef struct{
@@ -121,7 +122,7 @@ typedef struct{
   u32 retcount;
   int func_id;
   //u32 argcount;
-  wasm_code_reader rd;
+  io_reader rd;
 }wasm_control_stack_frame;
 
 typedef struct{
@@ -151,6 +152,11 @@ struct _wasm_execution_stack{
   bool keep_alive;
   
   char * error;
+
+  int * wait_fds;
+  int wait_fd_count;
+
+  int resume_id;
 };
 
 void wasm_fork_stack(wasm_execution_stack * ctx);
@@ -188,3 +194,12 @@ void (*_error)(const char * file, int line, const char * msg, ...);
 #define ERROR(msg,...) if(_error) _error(__FILE__,__LINE__,msg, ##__VA_ARGS__)
 #define ASSERT(expr) if(__builtin_expect(!(expr), 0)){ERROR("Assertion '" #expr "' Failed");}
 void logd(const char * msg, ...);
+
+void * awsm_alloc0(size_t size);
+void * awsm_alloc(size_t size);
+void awsm_dealloc(void * ptr);
+
+#define alloc awsm_alloc
+#define dealloc awsm_dealloc
+#define alloc0 awsm_alloc0
+

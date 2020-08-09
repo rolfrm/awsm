@@ -5,9 +5,25 @@
 #include <stdbool.h>
 #include <math.h>
 #include <stdarg.h>
+#include <sys/timerfd.h>
+#include <time.h>
+#include <sys/poll.h>
+
+#include <unistd.h>
 #include "wasm_instr.h"
+#include <microio.h>
 #include "awsm.h"
 #include "awsm_internal.h"
+
+char * io_readname(io_reader * rd){
+  u32 len = io_read_u32_leb(rd);
+  char * buffer = alloc(len + 1);
+  io_read(rd, buffer, len);
+  buffer[len] = 0;
+  return buffer;
+}
+
+u32 reader_getloc(io_reader * rd){return rd->offset;}
 
 void awsm_set_error_callback(void (*f)(const char * file, int line, const char * msg, ...)){
   _error = f;
@@ -35,17 +51,17 @@ static void _log(const char * msg, ...){
   va_end(arglist);
 }
 
-static void * alloc0(size_t size){
+void * awsm_alloc0(size_t size){
   void * ptr = malloc(size);
   memset(ptr, 0, size);
   return ptr;
 }
 
-static void * alloc(size_t size){
+void * awsm_alloc(size_t size){
   return alloc0(size);
 }
 
-static void dealloc(void * ptr){
+void awsm_dealloc(void * ptr){
   free(ptr);
 }
 
@@ -152,175 +168,27 @@ static size_t wasm_module_add_func(wasm_module * module){
 #define CONVERT_TO_F64(x) (f64)x
 #define UNSUPPORTED_OP(name){ ERROR("Unsupported operation\n"); } break;
 
-void reader_advance(wasm_code_reader * rd, size_t bytes){
-  if(rd->f){
-    rd->f(NULL, bytes, rd->user_data);
-    return;
-  }
-  ASSERT(rd->offset + bytes <= rd->size);
-  rd->offset += bytes;
-}
-
-u8 reader_read1(wasm_code_reader * rd){
-  if(rd->f){
-    u8 r;
-    rd->f(&r, 1, rd->user_data);
-    return r;
-  }
-  u8 b = ((u8 *)(rd->data + rd->offset))[0];
-  reader_advance(rd, 1);
-  return b;
-}
-
-u8 reader_peek1(wasm_code_reader * rd){
-  u8 b = ((u8 *)(rd->data + rd->offset))[0];
-  return b;
-}
-
-void reader_read(wasm_code_reader * rd, void * buffer, size_t len){
-  if(rd->f){
-    rd->f(buffer, len, rd->user_data);
-    return;
-  }
-  ASSERT(rd->offset + len <= rd->size);
-  memcpy(buffer, rd->data + rd->offset, len);
-  reader_advance(rd, len);
-}
-
-u64 reader_readu64(wasm_code_reader * rd){
-  // read LEB128
-  u8 chunk = 0;
-  u64 value = 0;
-  u32 offset = 0;
-  while((chunk = reader_read1(rd)) > 0){
-    value |= (0b01111111L & chunk) << offset;
-    offset += 7;
-    if((0b10000000L & chunk) == false)
-      break;
-  }
-  return value;
-}
-
-u32 encode_u64_leb(u64 value, u8 * buffer){
-  u8 * b1 = buffer;
-     
-  do{
-    *buffer = value & 0b01111111L;
-    value >>= 7;
-    if(value)
-      *buffer |= 0b10000000L;
-    buffer += 1;
-  }while(value > 0);
-  return buffer - b1;
-}
-
-u32 reader_readu32(wasm_code_reader * rd){
-  return reader_readu64(rd);
-}
-
-u64 reader_readu64_fixed(wasm_code_reader * rd){
-  u64 value;
-  reader_read(rd, &value, sizeof(value));
-  return value;
-}
-
-
-i32 reader_readi32_fixed(wasm_code_reader * rd){
-  i32 value;
-  reader_read(rd, &value, sizeof(value));
-  return value;
-}
-
-u32 reader_readu32_fixed(wasm_code_reader * rd){
-  u32 value;
-  reader_read(rd, &value, sizeof(value));
-  return value;
-}
-
-u16 reader_readu16_fixed(wasm_code_reader * rd){
-  u16 value;
-  reader_read(rd, &value, sizeof(value));
-  return value;
-}
-
-
-f32 reader_readf32(wasm_code_reader * rd){
-  f32 v = 0;
-  memcpy(&v, rd->data + rd->offset, sizeof(v));
-  reader_advance(rd, sizeof(v));
-  return v;
-}
-
-f64 reader_readf64(wasm_code_reader * rd){
-  f64 v = 0;
-  reader_read(rd, &v, sizeof(v));
-  return v;
-}
-
-i64 reader_readi64(wasm_code_reader * rd) {
-    // read LEB128
-  i64 value = 0;
-  u32 shift = 0;
-  u8 chunk;
-  do {
-    chunk = reader_read1(rd);
-    value |= (((u64)(chunk & 0x7f)) << shift);
-    shift += 7;
-  } while (chunk >= 128);
-  if (shift < 64 && (chunk & 0x40))
-    value |= (-1ULL) << shift;
-  return value;
-}
-
-i32 reader_readi32(wasm_code_reader * rd){
-  return (i32)reader_readi64(rd);
-}
-
-size_t reader_getloc(wasm_code_reader * rd){
-  ASSERT(rd->f == NULL);
-  return rd->offset;
-}
-  
-char * reader_readname(wasm_code_reader * rd){
-  u32 len = reader_readu32(rd);
-  char * buffer = alloc(len + 1);
-  reader_read(rd, buffer, len);
-  buffer[len] = 0;
-  return buffer;
-}
-
-char * reader_read_str(binary_io * io){
-  char * buf = NULL;
-  char c = 0;
-  size_t s = 0;
-  do{
-    c = reader_read1(io);
-    buf = realloc(buf, (s = s + 1));
-    buf[s- 1] = c;
-  }while(c != 0);
-  return buf;
-}
 
 
 
-static wasm_instr move_to_end_of_block(wasm_code_reader * rd, u32 block){
+static wasm_instr move_to_end_of_block(io_reader * rd, u32 block){
   u32 blk = block;
   while(rd->offset < rd->size){
-    wasm_instr instr = reader_read1(rd);
+    wasm_instr instr = io_read_u8(rd);
     logd("SKIP INSTR: %x\n", instr);
     if(instr >= WASM_INSTR_LOCAL_GET && instr <= WASM_INSTR_GLOBAL_SET)
       {
 	// all these has one integer.
-	reader_readu64(rd);
+	io_read_u64_leb(rd);
 	continue;
       }
     if(instr >= WASM_INSTR_I32_LOAD && instr <= WASM_INSTR_I64_STORE_32){
-      reader_readi64(rd);
-      reader_readi64(rd);
+      io_read_i64_leb(rd);
+      io_read_i64_leb(rd);
       continue;
     }
     if(instr >= WASM_INSTR_MEMORY_SIZE && instr <= WASM_INSTR_I64_CONST){
-      reader_readi64(rd);
+      io_read_i64_leb(rd);
       continue;
     }
       
@@ -338,7 +206,7 @@ static wasm_instr move_to_end_of_block(wasm_code_reader * rd, u32 block){
     case WASM_INSTR_BLOCK:
     case WASM_INSTR_LOOP:
     case WASM_INSTR_IF:
-      reader_read1(rd);
+      io_read_u8(rd);
       blk += 1;
       break;
     case WASM_INSTR_END:
@@ -352,29 +220,29 @@ static wasm_instr move_to_end_of_block(wasm_code_reader * rd, u32 block){
       break;
     case WASM_INSTR_BR:
     case WASM_INSTR_BR_IF:
-      reader_readu32(rd);
+      io_read_u32_leb(rd);
       break;
     case WASM_INSTR_BR_TABLE:
       {
-	u32 c = reader_readu32(rd);
+	u32 c = io_read_u32_leb(rd);
 	for(u32 i = 0; i < c; i++)
-	  reader_readu32(rd);
-	reader_readu32(rd);
+	  io_read_u32_leb(rd);
+	io_read_u32_leb(rd);
       }break;
     case WASM_INSTR_RETURN:
       break; // dont return while skip block
     case WASM_INSTR_CALL:
-      reader_readu32(rd);
+      io_read_u32_leb(rd);
       break;
     case WASM_INSTR_CALL_INDIRECT:
-      reader_readu32(rd);
-      reader_read1(rd);
+      io_read_u32_leb(rd);
+      io_read_u8(rd);
       break;
     case WASM_INSTR_F32_CONST:
-      reader_advance(rd, sizeof(f32));
+      io_advance(rd, sizeof(f32));
       break;
     case WASM_INSTR_F64_CONST:
-      reader_advance(rd, sizeof(f64));
+      io_advance(rd, sizeof(f64));
       break;
     default:
       ERROR("Unhandled instruction %x\n", instr);
@@ -384,7 +252,7 @@ static wasm_instr move_to_end_of_block(wasm_code_reader * rd, u32 block){
 }
 
 // Load a WASM module from bytes
-wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
+wasm_module * load_wasm_module(wasm_heap * heap, io_reader * rd){
   wasm_module module = {0};
   module.steps_per_context_switch = AWSM_DEFAULT_STEPS_PER_CONTEXT_SWITCH;
   module.heap = heap;
@@ -392,7 +260,7 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
    
   const char * magic_header_test = "\0asm";
   char magic_header[4];
-  reader_read(rd, magic_header, sizeof(magic_header));
+  io_read(rd, magic_header, sizeof(magic_header));
   bool contains_magic = memcmp(magic_header_test, magic_header, 4) == 0;
   if(contains_magic == false){
     ERROR("WASM data does not contain correct header");
@@ -401,7 +269,7 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
 
   const u8 wasm_version_test[]  = {1,0,0,0};
   char wasm_version[4];
-  reader_read(rd, wasm_version, sizeof(wasm_version));
+  io_read(rd, wasm_version, sizeof(wasm_version));
   bool contains_version = memcmp(wasm_version,wasm_version_test, sizeof(wasm_version)) == 0;
   if(contains_version == false){
     ERROR("WASM data does not contain correct header");
@@ -409,25 +277,25 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
   }
   
   while(rd->offset < rd->size){
-    wasm_section section = (wasm_section) reader_read1(rd);
+    wasm_section section = (wasm_section) io_read_u8(rd);
     logd(" %i: ", section);
     switch(section){
     case WASM_CUSTOM_SECTION:
       logd("WASM CUSTOM SECTION\n");
       {
-	u32 length = reader_readu32(rd);
+	u32 length = io_read_u32_leb(rd);
 	u32 offset_pre = rd->offset ;
-	char * name = reader_readname(rd);
+	char * name = io_readname(rd);
 	u32 namelen = rd->offset - offset_pre;
 	u32 sectionlen = length - namelen;
 	logd("Custom Section: %s %i\n", name, sectionlen);
 	if(strcmp(name, ".debug_line") == 0){
 	  u8 * buffer = alloc0(sectionlen);
-	  reader_read(rd, buffer, sectionlen);
+	  io_read(rd, buffer, sectionlen);
 	  module.dwarf_debug_lines = buffer;
 	  module.dwarf_debug_lines_size = sectionlen;
 	}else{
-	  reader_advance(rd,length - namelen);
+	  io_advance(rd,length - namelen);
 	}
 	continue;
       }
@@ -435,23 +303,23 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
     case WASM_TYPE_SECTION:
       {
 
-	u32 length = reader_readu32(rd);
+	u32 length = io_read_u32_leb(rd);
 	logd("WASM TYPE SECTION %i\n", length);
-	u32 typecount = reader_readu32(rd);
+	u32 typecount = io_read_u32_leb(rd);
 	module.type_count = typecount;
 	module.types = alloc0(sizeof(module.types[0]) * module.type_count);
 	for(u32 typeidx = 0; typeidx < typecount; typeidx++){
 	
-	  u8 header = reader_read1(rd);
+	  u8 header = io_read_u8(rd);
 	  ASSERT(header == 0x60);
-	  u32 paramcount = reader_readu32(rd);
+	  u32 paramcount = io_read_u32_leb(rd);
 	  for(u32 i = 0; i < paramcount; i++){
-	    reader_read1(rd); // discard
+	    io_read_u8(rd); // discard
 	  }
 
-	  u32 returncount = reader_readu32(rd);
+	  u32 returncount = io_read_u32_leb(rd);
 	  for(u32 i = 0; i < returncount; i++){
-	    reader_read1(rd); // discard
+	    io_read_u8(rd); // discard
 	  }
 	  module.types[typeidx].argcount = paramcount;
 	  module.types[typeidx].retcount = returncount;
@@ -461,20 +329,20 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
     case WASM_IMPORT_SECTION:
       {
 
-	u32 length = reader_readu32(rd);
+	u32 length = io_read_u32_leb(rd);
 	logd("IMPORT SECTION %i\n", length);
-	u32 guard = reader_getloc(rd);
-	u32 importCount = reader_readu32(rd);
+	u32 guard = rd->offset;
+	u32 importCount = io_read_u32_leb(rd);
 	logd("Import count: %i\n", importCount);
 	for(u32 i = 0; i < importCount; i++){
-	  char * modulename = reader_readname(rd);
-	  char * name = reader_readname(rd);
-	  wasm_import_type itype = reader_read1(rd);
+	  char * modulename = io_readname(rd);
+	  char * name = io_readname(rd);
+	  wasm_import_type itype = io_read_u8(rd);
 	  switch(itype){
 	  case WASM_IMPORT_FUNC:
 	    {
 
-	      u32 typeindex = reader_readu32(rd);
+	      u32 typeindex = io_read_u32_leb(rd);
 	      logd("IMPORT FUNC: %s %s %i\n", modulename, name, typeindex);
 	      // imported funcs comes before defined ones.
 	      wasm_module_add_func(&module);
@@ -489,15 +357,15 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
 	    }
 	  case WASM_IMPORT_TABLE:
 	    {
-	      u8 elemtype = reader_read1(rd);
+	      u8 elemtype = io_read_u8(rd);
 	      ASSERT(elemtype == 0x70);
-	      u8 limitt = reader_read1(rd);
+	      u8 limitt = io_read_u8(rd);
 	      u32 min = 0, max = 0;
 	      if(limitt == 0){
-		min = reader_readu32(rd);
+		min = io_read_u32_leb(rd);
 	      }else{
-		min = reader_readu32(rd);
-		max = reader_readu32(rd);
+		min = io_read_u32_leb(rd);
+		max = io_read_u32_leb(rd);
 	      }
 	      logd("TABLE: %i %i\n", min, max, elemtype);
 	      module.import_table = alloc0(min * sizeof(module.import_table[0]));
@@ -506,11 +374,11 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
 	    break;
 	  case WASM_IMPORT_MEM:
 	    {
-	      u8 hasMax = reader_read1(rd);
-	      u32 min = reader_readu32(rd), max = 0;
+	      u8 hasMax = io_read_u8(rd);
+	      u32 min = io_read_u32_leb(rd), max = 0;
 	    
 	      if(hasMax){
-		max = reader_readu32(rd);
+		max = io_read_u32_leb(rd);
 	      }
 	      
 	      logd("IMPORT MEMORY: %i %i %i\n", hasMax, min, max);
@@ -519,30 +387,30 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
 	    }
 	  case WASM_IMPORT_GLOBAL:
 	    {
-	      wasm_type type = (wasm_type) reader_read1(rd);
-	      bool mut = reader_read1(rd);
+	      wasm_type type = (wasm_type) io_read_u8(rd);
+	      bool mut = io_read_u8(rd);
 	      const char * state  = mut ? "mutable" : "const";
 	      ERROR("IMPORT GLOBAL: %s %s %i %i\n", module, name, state , type);
 	      break;
 	    }
 	  }
 	}
-	if(guard + length != reader_getloc(rd))
-	  ERROR("Parse imbalance %i != %i + %i (%x)!\n", reader_getloc(rd), guard, length);
+	if(guard + length != rd->offset)
+	  ERROR("Parse imbalance %i != %i + %i (%x)!\n", rd->offset, guard, length);
 	break;
       }
       case WASM_FUNCTION_SECTION:
       {
 	logd("FUNCTION SECTION\n");
-	u32 length = reader_readu32(rd);
+	u32 length = io_read_u32_leb(rd);
 	logd("Function section: length: %i\n", length);
-	u32 guard = reader_getloc(rd);
-	u32 funccount = reader_readu32(rd);
+	u32 guard = rd->offset;
+	u32 funccount = io_read_u32_leb(rd);
 	logd("count: %i\n", funccount);
        
 	for(u32 i = 0; i < funccount; i++){
 	  u32 funcindex = module.import_func_count + i;
-	  u32 f = reader_readu32(rd);
+	  u32 f = io_read_u32_leb(rd);
 	  logd("Func %i: %i %i\n",i, f, funcindex);
 	  if(module.func_count <= funcindex)
 	    wasm_module_add_func(&module);
@@ -556,27 +424,27 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
       }
     case WASM_TABLE_SECTION:
       {
-	u32 length = reader_readu32(rd);
+	u32 length = io_read_u32_leb(rd);
 	logd("TABLE SECTION (unsupported) %i\n", length);
 	//table section is not needed as it is dynamically expanded later...
-	reader_advance(rd, length);
+	io_advance(rd, length);
       }
       break;
     case WASM_MEMORY_SECTION:
       {
-	u32 length = reader_readu32(rd);
+	u32 length = io_read_u32_leb(rd);
 	logd("MEMORY SECTION (unsupported) %i\n", length);
-	i32 memcount = reader_readu32(rd);
+	i32 memcount = io_read_u32_leb(rd);
 	ASSERT(memcount == 1);
 	for(int i = 0; i < memcount; i++){
-	  u8 type = reader_read1(rd);
-	  u32 min = reader_readu32(rd);
+	  u8 type = io_read_u8(rd);
+	  u32 min = io_read_u32_leb(rd);
 	  wasm_heap_min_capacity(module.heap, min * WASM_PAGE_SIZE);
 	  if(type == 0){
 
 	    logd("Memory of %i pages\n", min);
 	  }else if(type == 1){
-	    u32 max = reader_readu32(rd);
+	    u32 max = io_read_u32_leb(rd);
 	    logd("Memory of %i-%i pages (%i - %i)\n", min, max, min * WASM_PAGE_SIZE, max * WASM_PAGE_SIZE);
 	  }else{
 	    ERROR("Unsupported operation\n");
@@ -586,50 +454,50 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
       break;
     case WASM_GLOBAL_SECTION:
       {
-	u32 length = reader_readu32(rd);
+	u32 length = io_read_u32_leb(rd);
 	logd("GLOBAL section: length: %i\n", length);
-	u32 global_count = reader_readu32(rd);
+	u32 global_count = io_read_u32_leb(rd);
 	module.globals = alloc0(sizeof(module.globals[0]) * global_count);
 	module.global_count = global_count;
 	for(u32 i = 0; i < global_count; i++){
-	  u8 valtype = reader_read1(rd);
-	  u8 mut = reader_read1(rd);
+	  u8 valtype = io_read_u8(rd);
+	  u8 mut = io_read_u8(rd);
 	  logd("GLOBAL %i: %x %s\n", i,  valtype, mut ? "MUT" : "CONST");
-	  wasm_instr instr = reader_read1(rd);
+	  wasm_instr instr = io_read_u8(rd);
 	  switch(instr){
 	  case WASM_INSTR_I32_CONST:
-	    module.globals[i] = (u64)reader_readi32(rd);
+	    module.globals[i] = (u64)io_read_i32_leb(rd);
 	    break;
 	  case WASM_INSTR_I64_CONST:
-	    module.globals[i] = (u64)reader_readi64(rd);
+	    module.globals[i] = (u64)io_read_i64_leb(rd);
 	    break;
 	  case WASM_INSTR_F32_CONST:
-	    ((f64 *)module.globals)[i] = (f64) reader_readf64(rd);
+	    ((f64 *)module.globals)[i] = (f64) io_read_f64(rd);
 	    break;
 	  case WASM_INSTR_F64_CONST:
-	    ((f64 *)module.globals)[i] = (f64) reader_readf64(rd);
+	    ((f64 *)module.globals)[i] = (f64) io_read_f64(rd);
 	    break;
 	  default:
 	    ERROR("Unsupported Const type: %i\n", instr);
 	  }
 	  
-	  wasm_instr end = reader_read1(rd);
+	  wasm_instr end = io_read_u8(rd);
 	  ASSERT(end == WASM_INSTR_END); 
 	}
       }
       break;
     case WASM_EXPORT_SECTION:
       {
-	u32 length = reader_readu32(rd);
+	u32 length = io_read_u32_leb(rd);
 	logd("EXPORT section: length: %i\n", length);
-	u32 exportcount = reader_readu32(rd);
+	u32 exportcount = io_read_u32_leb(rd);
 	for(u32 i = 0; i < exportcount; i++){
-	  char * name = reader_readname(rd);
-	  wasm_import_type etype = (wasm_import_type) reader_read1(rd);
+	  char * name = io_readname(rd);
+	  wasm_import_type etype = (wasm_import_type) io_read_u8(rd);
 	  switch(etype){
 	  case WASM_IMPORT_FUNC:
 	    {
-	      u32 index = reader_readu32(rd);
+	      u32 index = io_read_u32_leb(rd);
 
 	      size_t local_func_index = module.local_func_count;
 	      module.local_func_count += 1;
@@ -645,13 +513,13 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
 	    }
 	  case WASM_IMPORT_MEM:
 	    {
-	      u32 memory_index = reader_readu32(rd);
+	      u32 memory_index = io_read_u32_leb(rd);
 	      logd("MEMORY %i\n", memory_index);
 	      break;
 	    }
 	  case WASM_IMPORT_GLOBAL:
 	    {
-	      u32 global_index = reader_readu32(rd);
+	      u32 global_index = io_read_u32_leb(rd);
 	      logd("GLOBAL %i\n", global_index);
 	      break;			 
 	    }
@@ -662,30 +530,30 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
     
     case WASM_START_SECTION:
       {
-	u32 length = reader_readu32(rd);
+	u32 length = io_read_u32_leb(rd);
 	logd("START SECTION (unsupported) %i\n", length);
-	reader_advance(rd, length);
+	io_advance(rd, length);
       }break;
     case WASM_ELEMENT_SECTION:
       {
-	u32 length = reader_readu32(rd);
+	u32 length = io_read_u32_leb(rd);
 	logd("Element section: length: %i\n", length);
-	u32 elem_count = reader_readu32(rd);
+	u32 elem_count = io_read_u32_leb(rd);
 	for(u32 i = 0; i < elem_count; i++){
-	  u32 table_index = reader_readu32(rd);
+	  u32 table_index = io_read_u32_leb(rd);
 	  ASSERT(table_index == 0);
-	  wasm_instr instr = reader_read1(rd);
+	  wasm_instr instr = io_read_u8(rd);
 	  ASSERT(instr == WASM_INSTR_I32_CONST);
 
-	  u32 offset = reader_readu32(rd);
-	  wasm_instr end = reader_read1(rd);
+	  u32 offset = io_read_u32_leb(rd);
+	  wasm_instr end = io_read_u8(rd);
 	  ASSERT(end == WASM_INSTR_END);
-	  u32 func_count = reader_readu32(rd);
+	  u32 func_count = io_read_u32_leb(rd);
 	  if(module.import_table_count < func_count){
 	    module.import_table = realloc(module.import_table, sizeof(module.import_table[0]) * (module.import_table_count = (1 + func_count)));
 	  }
 	  for(u32 i = 0; i < func_count; i++){
-	    u32 idx = reader_readu32(rd);
+	    u32 idx = io_read_u32_leb(rd);
 	    logd("Function %i %i %i\n", func_count, offset, idx);
 	    module.import_table[i + 1] = idx;
 	  }
@@ -695,22 +563,22 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
     case WASM_CODE_SECTION:
       {
 	u32 code_section_offset = rd->offset;
-	u32 length = reader_readu32(rd);
+	u32 length = io_read_u32_leb(rd);
 	logd("Code section: length: %i\n", length);
 	u32 guard = reader_getloc(rd);
-	u32 funccount = reader_readu32(rd);
+	u32 funccount = io_read_u32_leb(rd);
 	logd("Code Count: %i\n", funccount);
 	for(u32 i = 0; i < funccount; i++){
 	  int funcindex = i + module.import_func_count;
 
 	  
-	  u32 codesize = reader_readu32(rd);
+	  u32 codesize = io_read_u32_leb(rd);
 	  u32 code_function_offset = rd->offset;
 	  module.func[funcindex].code = rd->data + rd->offset;
 	  module.func[funcindex].length = codesize;
 	  module.func[funcindex].code_offset = code_function_offset - code_section_offset;
 
-	  reader_advance(rd, codesize);
+	  io_advance(rd, codesize);
 	}
 
 	if(guard + length != reader_getloc(rd))
@@ -719,28 +587,28 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
       break;
     case WASM_DATA_SECTION:
       {
-	u32 length = reader_readu32(rd);
+	u32 length = io_read_u32_leb(rd);
 	logd("Data Section: %i\n", length);
 	u32 guard = reader_getloc(rd);
-	u32 datacount = reader_readu32(rd);
+	u32 datacount = io_read_u32_leb(rd);
 	bool isGlobal = false;
 	for(u32 i = 0; i < datacount; i++){
-	  u32 memidx = reader_readu32(rd);
+	  u32 memidx = io_read_u32_leb(rd);
 	  ASSERT(memidx == 0);
 	  u32 offset = 0;
 
 	  while(true){
-	    wasm_instr instr = (wasm_instr)reader_read1(rd);
+	    wasm_instr instr = (wasm_instr)io_read_u8(rd);
 	    switch(instr){
 	    case WASM_INSTR_I32_CONST:
 	      {
-		i32 _offset = reader_readi32(rd);
+		i32 _offset = io_read_i32_leb(rd);
 		offset = _offset;
 		break;
 	      }
 	    case WASM_INSTR_GLOBAL_GET:
 	      {
-		i32 _offset = reader_readi32(rd);
+		i32 _offset = io_read_i32_leb(rd);
 		offset = _offset;
 		isGlobal = true;
 		break;
@@ -754,10 +622,10 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
 	  }
 	end_read:;
 
-	  u32 bytecount = reader_readu32(rd);
+	  u32 bytecount = io_read_u32_leb(rd);
 	  logd("DATA SECTION: %i %i %s\n", offset, bytecount, isGlobal ? "global" : "local");
 	  wasm_heap_min_capacity(module.heap, bytecount + offset + 1);
-	  reader_read(rd, module.heap->heap + offset, bytecount);
+	  io_read(rd, module.heap->heap + offset, bytecount);
 	}
 	if(guard + length != reader_getloc(rd))
 	  ERROR("Parse imbalance!\n");
@@ -766,10 +634,10 @@ wasm_module * load_wasm_module(wasm_heap * heap, wasm_code_reader * rd){
       }
      default:
        {
-	 u32 length = reader_readu32(rd);
+	 u32 length = io_read_u32_leb(rd);
 	 logd("unsupported section%i, 0x%X\n", section, length);
 
-	 reader_advance(rd, length);
+	 io_advance(rd, length);
        }  
     }
   }
@@ -988,9 +856,9 @@ static void wasm_push_u64r(wasm_execution_stack * ctx, u64 * in){
   wasm_push_data(ctx, in, sizeof(in[0]));
 }
 
-static void load_op(wasm_code_reader * rd, wasm_execution_stack * ctx, int bytes){
-  reader_readu32(rd); //align
-  u32 offset = reader_readu32(rd);
+static void load_op(io_reader * rd, wasm_execution_stack * ctx, int bytes){
+  io_read_u32_leb(rd); //align
+  u32 offset = io_read_u32_leb(rd);
   i32 addr;
   wasm_pop_i32(ctx, &addr);
   u32 total_offset = addr + offset;
@@ -999,9 +867,9 @@ static void load_op(wasm_code_reader * rd, wasm_execution_stack * ctx, int bytes
   wasm_push_data(ctx, valptr, bytes);
 }
 
-static void store_op(wasm_code_reader * rd, wasm_execution_stack * ctx, int bytes){
-  reader_readu32(rd); // align
-  u32 offset = reader_readu32(rd);
+static void store_op(io_reader * rd, wasm_execution_stack * ctx, int bytes){
+  io_read_u32_leb(rd); // align
+  u32 offset = io_read_u32_leb(rd);
   u64 value;
   wasm_pop_u64(ctx, &value);
   i32 addr;
@@ -1039,6 +907,7 @@ static bool pop_label(wasm_execution_stack * ctx, bool move){
       logd("dropped stack frame: frame stack pos: %i == stack ptr: %i ret count: %i\n", f->stack_pos, ctx->stack_ptr, f->retcount);
       if(f->stack_pos != ctx->stack_ptr - f->retcount){
 	ERROR("Stack imbalance!");
+	ASSERT(false);
       }
       ctx->frame_ptr -= 1;
       return true;
@@ -1131,7 +1000,7 @@ static i64 func_index(wasm_module * mod, const char * name){
 
 bool wasm_stack_is_finalized(wasm_execution_stack * ctx){
   wasm_control_stack_frame * f = ctx->frames + ctx->frame_ptr;
-  wasm_code_reader * rd = &f->rd;
+  io_reader * rd = &f->rd;
   if(rd->offset == rd->size)
     return true;
   
@@ -1160,7 +1029,7 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
   ctx->yield = false;
   int startcount = stepcount;
   wasm_control_stack_frame * f = ctx->frames + ctx->frame_ptr;
-  wasm_code_reader * rd = &f->rd;
+  io_reader * rd = &f->rd;
   wasm_module * mod = ctx->module;
   ASSERT(mod);
   while(rd->offset < rd->size && stepcount > 0){
@@ -1171,7 +1040,7 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
     
 
     stepcount--;
-    wasm_instr instr = reader_read1(rd);
+    wasm_instr instr = io_read_u8(rd);
     logd("- %x: %s(%x) (/%x)\n", rd->offset, wasm_instr_name[instr], instr, stepcount);
     switch(instr){
 
@@ -1184,26 +1053,26 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
       break;
     case WASM_INSTR_BLOCK:
       {
-	u8 blktype = reader_read1(rd);
+	u8 blktype = io_read_u8(rd);
 	logd("block type: %i\n", blktype);
 	push_label(ctx, blktype, true);
       }
       break;
     case WASM_INSTR_LOOP:
       {
-	u8 blktype = reader_read1(rd);
+	u8 blktype = io_read_u8(rd);
 	logd("block type: %i\n", blktype);
 	push_label(ctx, blktype, false);
       }
       break;
     case WASM_INSTR_IF:
       {
-	u8 blktype = reader_read1(rd);
+	u8 blktype = io_read_u8(rd);
 	push_label(ctx, blktype, true);
 	u64 cnd;
 	wasm_pop_u64(ctx, &cnd);
 	if(cnd){
-	  logd("ENTER IF %x %p\n", reader_read1(rd), cnd);
+	  logd("ENTER IF %x %p\n", io_read_u8(rd), cnd);
 	  rd->offset -= 1;
 	}else{
 	  logd("ENTER ELSE\n");	
@@ -1253,7 +1122,7 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
 
       wasm_instr_br:;
 
-	u32 brindex = reader_readu32(rd);
+	u32 brindex = io_read_u32_leb(rd);
 	logd("BR %i\n", brindex);
 	pop_label2(ctx, brindex);
       }
@@ -1266,7 +1135,7 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
 	logd("BR IF %x %i\n", x, f->block);
 	if(x)
 	  goto wasm_instr_br;
-	reader_readu32(rd);
+	io_read_u32_leb(rd);
 	//else continue..
       }
       break;
@@ -1274,12 +1143,12 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
       {
 	u32 x;
 	wasm_pop_u32(ctx, &x);	
-	u32 cnt = reader_readu32(rd);
+	u32 cnt = io_read_u32_leb(rd);
 	u32 items[cnt];
 	for(u32 i = 0; i < cnt; i++){
-	  items[i] = reader_readu32(rd);
+	  items[i] = io_read_u32_leb(rd);
 	}
-	u32 ret = reader_readu32(rd);
+	u32 ret = io_read_u32_leb(rd);
 	u32 brindex;
 	if(x < cnt)
 	  brindex = items[x];
@@ -1301,16 +1170,16 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
       {
 	u32 fcn;
 	if(instr == WASM_INSTR_CALL_INDIRECT){
-	  u32 typeidx = reader_readu32(rd);
+	  u32 typeidx = io_read_u32_leb(rd);
 	  UNUSED(typeidx);
-	  ASSERT(reader_read1(rd) == 0);
+	  ASSERT(io_read_u8(rd) == 0);
 	  wasm_pop_u32(ctx, &fcn);
 	  if(fcn >= mod->import_table_count){
 	    ERROR("Invalid indirect call: %i %i\n", fcn, mod->import_table_count);
 	  }
 	  fcn = mod->import_table[fcn];
 	}else{
-	  fcn = reader_readu32(rd);
+	  fcn = io_read_u32_leb(rd);
 	}
 	if(fcn > mod->func_count){
 	  ERROR("Unknown function %i\n", fcn);
@@ -1322,7 +1191,63 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
 	  if(fcn == NULL){
 	    ERROR("Unlinked symbol: %s\n", fn->name);
 	  }
+
+	  if(fn->options & AWSM_FCN_OPT_BLOCKING){
+	    for(int i = 0; i < ctx->wait_fd_count; i++){
+	      awsm_push_i32(ctx, ctx->wait_fds[ctx->wait_fd_count - i - 1]);
+	    }
+	    awsm_push_u32(ctx, ctx->wait_fd_count);
+	    wasm_push_i32(ctx, ctx->resume_id);
+	  }
+	  
 	  fcn(ctx);
+	  if(fn->options & AWSM_FCN_OPT_BLOCKING){
+	    // when an async function is yielding or returning,
+	    // it should push whatever it wants on the stack, but the
+	    // last thing should be a status byte
+	    // if the status byte is set to 'YIELD', then
+	    // the function will yield and when the code returns it should
+	    // be called again.
+	    u32 status; 
+	    wasm_pop_u32(ctx, &status);
+	    if(status == AWSM_BLK_YIELD){
+
+	      if(instr == WASM_INSTR_CALL_INDIRECT){
+		// rewind by 1 + 4 + 1
+		io_rewind(rd, 6 + 1);
+	      }else{
+		// 1 + 4
+		io_rewind(rd, 5 + 1);
+	      }
+
+	    }else if(status == AWSM_BLK_SELECT){
+	      if(instr == WASM_INSTR_CALL_INDIRECT){
+		// rewind by 1 + 4 + 1
+		io_rewind(rd, 6 + 1);
+	      }else{
+		// 1 + 4
+		io_rewind(rd, 5 + 1);
+	      }
+
+	      u32 fd_cnt = awsm_pop_u32(ctx);
+	      ctx->wait_fd_count = fd_cnt;
+	      ctx->wait_fds = realloc(ctx->wait_fds, fd_cnt * sizeof(ctx->wait_fds[0]));
+	      for(u32 i = 0; i < fd_cnt; i++){
+		int fd = awsm_pop_i32(ctx);
+		ctx->wait_fds[i] = fd;
+		printf("Waiting for %i\n", fd);
+	      }
+	      ctx->resume_id = 1;
+	      return startcount - stepcount;
+	      
+	    } else{
+	      ASSERT(status == AWSM_BLK_RETURN);
+	      printf("AWSM_BLK_RETURN! \n");
+	      ctx->resume_id = 0;
+	      
+	    }
+	    
+	  }
 	  if(ctx->yield){
 
 	    return startcount - stepcount;
@@ -1337,11 +1262,11 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
 	  f->stack_pos = ctx->stack_ptr - fn->argcount;
 	  f->func_id = fcn;
 	  //f->argcount = fn->argcount;
-	  rd[0] = (wasm_code_reader){.data = fn->code, .size = fn->length, .offset = 0, .f = NULL};
-	  u32 l = reader_readu32(rd);
+	  rd[0] = (io_reader){.data = fn->code, .size = fn->length, .offset = 0, .f = NULL};
+	  u32 l = io_read_u32_leb(rd);
 	  for(u32 i = 0; i < l; i++){
-	    u32 elemcount = reader_readu32(rd);
-	    u8 type = reader_read1(rd);
+	    u32 elemcount = io_read_u32_leb(rd);
+	    u8 type = io_read_u8(rd);
 
 	    { // sanity check
 	      switch(type){
@@ -1382,7 +1307,7 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
       
     case WASM_INSTR_LOCAL_SET:
       {
-	u32 local = reader_readu32(rd);
+	u32 local = io_read_u32_leb(rd);
 	u64 * localptr = getlocal(ctx, local);
 	wasm_pop_u64(ctx, localptr);
 	logd("Local set %i: %p\n", local, localptr[0]);
@@ -1390,7 +1315,7 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
       }
     case WASM_INSTR_LOCAL_GET:
       {
-	u32 local = reader_readu32(rd);
+	u32 local = io_read_u32_leb(rd);
 	u64 val = getlocal(ctx, local)[0];
 	wasm_push_u64(ctx, val);
 	logd("Local get %i: %p %f\n", local, val, val);
@@ -1398,7 +1323,7 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
       break;
     case WASM_INSTR_LOCAL_TEE:
       {
-	u32 local = reader_readu32(rd);
+	u32 local = io_read_u32_leb(rd);
 	u64 value;
 	wasm_pop_u64(ctx, &value);
 	wasm_push_u64(ctx, value);	
@@ -1408,13 +1333,13 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
       break;
     case WASM_INSTR_GLOBAL_SET:
       {
-	u32 global_index = reader_readu32(rd);
+	u32 global_index = io_read_u32_leb(rd);
 	wasm_pop_u64(ctx, mod->globals + global_index);
 	break;
       }
     case WASM_INSTR_GLOBAL_GET:
       {
-	u32 global_index = reader_readu32(rd);
+	u32 global_index = io_read_u32_leb(rd);
 	wasm_push_u64r(ctx, mod->globals + global_index);
 	break;
       }
@@ -1467,7 +1392,7 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
       store_op(rd, ctx, 4);break;
     case WASM_INSTR_MEMORY_SIZE: // = 0x3F,
       {
-	reader_read1(rd);
+	io_read_u8(rd);
 	size_t cap = mod->heap->capacity;
 	wasm_push_u64(ctx, cap / WASM_PAGE_SIZE);
 	logd("MEMORY SIZE: %i\n", cap);
@@ -1485,18 +1410,18 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
       }
       break;
     case WASM_INSTR_I32_CONST:
-      wasm_push_i32(ctx, reader_readi32(rd)); break;
+      wasm_push_i32(ctx, io_read_i32_leb(rd)); break;
     case WASM_INSTR_I64_CONST:
       {
-	i64 v = reader_readi64(rd);
+	i64 v = io_read_i64_leb(rd);
 	logd("Const value %p\n", v);
 	wasm_push_i64(ctx, v);
 	break;
       }
     case WASM_INSTR_F32_CONST:
-      wasm_push_f32(ctx, reader_readf32(rd)); break;
+      wasm_push_f32(ctx, io_read_f32(rd)); break;
     case WASM_INSTR_F64_CONST:
-      wasm_push_f64(ctx, reader_readf64(rd)); break;
+      wasm_push_f64(ctx, io_read_f64(rd)); break;
     case WASM_INSTR_I32_EQZ:
       UNARY_OPF(i32, OP_EQZ);
     case WASM_INSTR_I32_EQ:
@@ -1755,6 +1680,8 @@ void wasm_load_code(wasm_execution_stack * ctx, u8 * code, size_t l){
   f->rd.data = code;
   f->func_id = -1;
   ctx->frame_ptr = 0;
+  ctx->initializer = code;
+  ctx->initializer_size = l;
 }
 
 void wasm_fork_stack(wasm_execution_stack * init_ctx){
@@ -1786,7 +1713,7 @@ int wasm_exec_code3(wasm_execution_stack * ctx, u8 * code, size_t l, u32 steps){
   return wasm_exec_code2(ctx, steps);
 }
 
-void awsm_register_function(wasm_module * module, void (* func)(wasm_execution_stack * stack), const char * name){
+void awsm_register_function2(wasm_module * module, void (* func)(wasm_execution_stack * stack), const char * name, awsm_fcn_opt options){
   
   for(u32 i = 0; i < module->import_func_count; i++){
 
@@ -1795,6 +1722,7 @@ void awsm_register_function(wasm_module * module, void (* func)(wasm_execution_s
       wasm_function * f = module->func + i;
       f->functype = WASM_FUNCTION_TYPE_IMPORT;
       f->code = func;
+      f->options = options;
       return;
     }
   }
@@ -1807,9 +1735,14 @@ void awsm_register_function(wasm_module * module, void (* func)(wasm_execution_s
       wasm_function * f = module->func + i;
       f->functype = WASM_FUNCTION_TYPE_IMPORT;
       f->code = func;
+      f->options = options;
       return;
     }
   }
+}
+
+void awsm_register_function(wasm_module * module, void (* func)(wasm_execution_stack * stack), const char * name){
+  awsm_register_function2(module, func, name, AWSM_FCN_OPT_NONE);
 }
 
 int awsm_get_function(wasm_module * module, const char * name){
@@ -1979,6 +1912,31 @@ void _set_heap_size(stack * ctx){
   
 }
 
+void _sleep(stack * ctx){
+
+  int resume_id = awsm_pop_i32(ctx);
+  if(resume_id > 0){
+    printf("Sleep resume!\n");
+    ASSERT(awsm_pop_u32(ctx) == 1);
+    int fd = awsm_pop_i32(ctx);
+    close(fd);
+    wasm_push_u32(ctx, AWSM_BLK_RETURN);
+  }else{
+    printf("Sleep start!\n");
+    struct itimerspec timer_value = {0};
+    ASSERT(awsm_pop_u32(ctx) == 0);
+    u32 sleep_ms = awsm_pop_u32(ctx);
+    timer_value.it_value.tv_nsec = (sleep_ms % 1000) * 1000000;
+    timer_value.it_value.tv_sec = sleep_ms / 1000;
+    int fd = timerfd_create(CLOCK_REALTIME, 0);
+    awsm_push_i32(ctx, fd);
+    awsm_push_u32(ctx, 1);
+    timerfd_settime(fd, 0, &timer_value, NULL);
+    wasm_push_u32(ctx, AWSM_BLK_SELECT);
+  }
+  
+}
+
 wasm_module * awsm_load_module_from_file(const char * wasm_file){
   size_t buffer_size = 0;
   void * data = read_file_to_buffer(wasm_file, &buffer_size);
@@ -1987,7 +1945,7 @@ wasm_module * awsm_load_module_from_file(const char * wasm_file){
     return NULL;
   }
   wasm_heap * heap = alloc0(sizeof(heap[0]));
-  wasm_code_reader rd = {.data = data, .size = buffer_size, .offset = 0, .f = NULL};
+  io_reader rd = {.data = data, .size = buffer_size, .offset = 0, .f = NULL};
   wasm_module * mod = load_wasm_module(heap, &rd);
   awsm_register_function(mod, _print_i32, "print_i32");
   awsm_register_function(mod, _print_i64, "print_i64");
@@ -2005,6 +1963,7 @@ wasm_module * awsm_load_module_from_file(const char * wasm_file){
   awsm_register_function(mod, _get_heap_size, "get_heap_size");
   awsm_register_function(mod, _set_heap_size, "set_heap_size");
   awsm_register_function(mod, _wasm_error, "awsm_error");
+  awsm_register_function2(mod, _sleep, "sleep", AWSM_FCN_OPT_BLOCKING);
   awsm_set_error_callback(standard_error_callback);
   return mod;
 }
@@ -2017,8 +1976,34 @@ bool awsm_process(wasm_module * module, u64 steps_total){
   u64 group = module->steps_per_context_switch;
   if(module->stacks == NULL)
     return false;
+  struct pollfd sleep_fds[16] = {0};
   while(module->steps_executed < steps_target){
     u64 i = module->current_stack;
+
+    int sleeps = 0;
+    bool all_sleeps = true;
+    for(u32 i = 0; i < module->stack_count; i++){
+      if(module->stacks[i] == NULL)continue;
+      
+      if(module->stacks[i]->wait_fd_count == 0){
+       
+	all_sleeps = false;
+      }else{
+	for(int j = 0; j < module->stacks[i]->wait_fd_count; j++){
+	  sleep_fds[sleeps].fd = module->stacks[i]->wait_fds[j];
+	  sleep_fds[sleeps].events = POLLIN;
+	  sleeps++;
+	}
+      }
+    }
+
+    if(all_sleeps){
+      printf("all sleeps! %i\n", all_sleeps);
+      poll(sleep_fds, 2, -1);
+    }
+    
+
+    
     while(module->stacks[i] == NULL || module->stacks[i]->error != NULL){
       i++;
       if(i >= module->stack_count) i = 0;
@@ -2060,26 +2045,21 @@ stack * awsm_load_thread_arg(wasm_module * module, const char * func, u32 arg){
   int ret_cnt = awsm_get_function_ret_cnt(module, main_index);
   logd("Load Thread. (%s) %x (%i) -> %i\n", func, main_index, arg_cnt, ret_cnt);
   u8 code[128] = {0};
-  code[0] = WASM_INSTR_I32_CONST;
-  code[1] = 31;
-  u32 offset = 2;
+  io_writer _wd = {.data = code, .offset = 0, .size = sizeof(code)};
+  io_writer * wd = &_wd;
+  io_write_u8(wd, WASM_INSTR_I32_CONST);
+  io_write_u8(wd, 31);
   for(int i = 0; i < arg_cnt; i++){
-    code[offset] = WASM_INSTR_I32_CONST;
-    offset += 1;
-    int len = encode_u64_leb((u64)(i == 0 ? arg : 0), code + offset);
-    offset += len;
+    io_write_u8(wd, WASM_INSTR_I32_CONST);
+    io_write_u64_leb(wd, (u64)(i == 0 ? arg : 0));
   }
-  code[offset] = WASM_INSTR_CALL;
-  offset += 1;
-  offset += encode_u64_leb((u64)main_index, code + offset);
-  for(int i = 0; i < ret_cnt; i++){
-    code[offset + i] = WASM_INSTR_DROP;
-  }
-  offset += ret_cnt;
+  io_write_u8(wd, WASM_INSTR_CALL);
+  io_write_u64_leb(wd, main_index);
+  for(int i = 0; i < ret_cnt; i++)
+    io_write_u8(wd, WASM_INSTR_DROP);
   
-  ctx->initializer = mem_clone(code, offset);
-  ctx->initializer_size = offset;
-  wasm_load_code(ctx, ctx->initializer, offset);
+  u8 * initializer = mem_clone(_wd.data, _wd.offset);
+  wasm_load_code(ctx, initializer, _wd.offset);
   return ctx;
 }
 
@@ -2217,20 +2197,20 @@ void awsm_debug_remove_breakcheck(wasm_module * mod, breakcheck_id id){
 int awsm_debug_next_instr(wasm_execution_stack * ctx)
 {
   wasm_control_stack_frame * f = ctx->frames + ctx->frame_ptr;
-  wasm_code_reader * rd = &f->rd;
-  wasm_instr instr = reader_peek1(rd);
+  io_reader * rd = &f->rd;
+  wasm_instr instr = io_peek_u8(rd);
   return instr;
 }
 
 int awsm_debug_location(wasm_execution_stack * ctx){
   wasm_control_stack_frame * f = ctx->frames + ctx->frame_ptr;
-  wasm_code_reader * rd = &f->rd;
+  io_reader * rd = &f->rd;
   return rd->offset;
 }
 
 int awsm_debug_source_address(wasm_execution_stack * ctx){
   wasm_control_stack_frame * f = ctx->frames + ctx->frame_ptr;
-  wasm_code_reader * rd = &f->rd;
+  io_reader * rd = &f->rd;
   int func_id = f->func_id;
   wasm_module * mod = ctx->module;
   if((int)mod->func_count < func_id)
@@ -2246,7 +2226,7 @@ int awsm_debug_source_location(wasm_execution_stack * ctx, char * out_filename, 
   UNUSED(out_filename);
   UNUSED(out_line);
   wasm_control_stack_frame * f = ctx->frames + ctx->frame_ptr;
-  wasm_code_reader * rd = &f->rd;
+  io_reader * rd = &f->rd;
   int func_id = f->func_id;
   wasm_module * mod = ctx->module;
   if((int)mod->func_count < func_id)
@@ -2276,63 +2256,36 @@ const char * awsm_debug_instr_name(int instr){
 }
 
 
-
-void writer_write(data_writer * writer, const void * data, size_t count){
-  if(writer->f){
-    writer->f((void *) data, count, writer->user_data);
-    return;
-  }
-  if(writer->offset + count > writer->size){
-    size_t newsize = (writer->size + count) * 1.2;
-    writer->data = realloc(writer->data, newsize);
-    writer->size = newsize;
-  }
-  memcpy(writer->data + writer->offset, data, count);
-  writer->offset += count;
-}
-void writer_write_u8(data_writer * wd, u8 value){ writer_write(wd, &value, sizeof(value));}
-void writer_write_u32(data_writer * wd, u32 value){ writer_write(wd, &value, sizeof(value));}
-void writer_write_u64(data_writer * wd, u64 value){ writer_write(wd, &value, sizeof(value));}
-void writer_write_i32(data_writer * wd, i32 value){ writer_write(wd, &value, sizeof(value));}
-
-void writer_write_str(binary_io * io, const char * str){
-  int len = strlen(str);
-  writer_write(io, str, len + 1);
-}
-
-
-// -- Saving and load VM state. -- 
-
 // markerthing is used for checking sanity during load
 u32 markerthing = 0x00BEEF00;
 
-void frame_save(data_writer * wd, wasm_control_stack_frame * f, stack * stk){
-  writer_write_u32(wd, markerthing);
-  writer_write_i32(wd, f->block);
-  writer_write_u32(wd, f->label_offset);
-  writer_write_u32(wd, f->stack_pos);
-  writer_write_u32(wd, f->localcount);
-  writer_write_u32(wd, f->retcount);
-  writer_write_i32(wd, f->func_id);
-  wasm_code_reader rd = f->rd;
+void frame_save(io_writer * wd, wasm_control_stack_frame * f, stack * stk){
+  io_write_u32(wd, markerthing);
+  io_write_i32(wd, f->block);
+  io_write_u32(wd, f->label_offset);
+  io_write_u32(wd, f->stack_pos);
+  io_write_u32(wd, f->localcount);
+  io_write_u32(wd, f->retcount);
+  io_write_i32(wd, f->func_id);
+  io_reader rd = f->rd;
 
   if(rd.data >= stk->initializer && rd.data <= stk->initializer + stk->initializer_size){
     // executing initializer code.
-    writer_write_u8(wd, 0);
-    writer_write_u32(wd, rd.offset);
+    io_write_u8(wd, 0);
+    io_write_u32(wd, rd.offset);
   }else{
 
     if(f->func_id >= 0){
       // Executing a function.
-      writer_write_u8(wd, 2);
-      writer_write_u32(wd, rd.offset);
+      io_write_u8(wd, 2);
+      io_write_u32(wd, rd.offset);
     }else{
       wasm_heap * heap = stk->module->heap;
       // printf("%p %p %i\n", rd.data, heap->heap,
     if(rd.data >= heap->heap && rd.data < heap->heap + heap->capacity){
       // executing code directly from the heap.
-      writer_write_u8(wd, 1);
-      writer_write_u32(wd, rd.offset);
+      io_write_u8(wd, 1);
+      io_write_u32(wd, rd.offset);
     }
     else{
       ERROR("Unknown function type, cannot save!\n");
@@ -2344,42 +2297,42 @@ void frame_save(data_writer * wd, wasm_control_stack_frame * f, stack * stk){
 
 }
 
-void stack_save(data_writer * wd, stack * stk){
-  writer_write_u32(wd, markerthing);
-  writer_write_u32(wd, stk->stack_ptr);  
-  writer_write(wd, stk->stack, (stk->stack_ptr + 1) * sizeof(stk->stack[0]));
+void stack_save(io_writer * wd, stack * stk){
+  io_write_u32(wd, markerthing);
+  io_write_u32(wd, stk->stack_ptr);  
+  io_write(wd, stk->stack, (stk->stack_ptr + 1) * sizeof(stk->stack[0]));
 
-  writer_write_u32(wd, stk->initializer_size);
-  writer_write(wd, stk->initializer, stk->initializer_size);
+  io_write_u32(wd, stk->initializer_size);
+  io_write(wd, stk->initializer, stk->initializer_size);
   
-  writer_write_u32(wd, stk->frame_ptr);
+  io_write_u32(wd, stk->frame_ptr);
 
   for(u32 i = 0; i <= stk->frame_ptr; i++)
     frame_save(wd, stk->frames + i, stk);
-  writer_write_u32(wd, stk->label_capacity);
-  writer_write(wd, stk->labels, stk->label_capacity * sizeof(stk->labels[0]));
+  io_write_u32(wd, stk->label_capacity);
+  io_write(wd, stk->labels, stk->label_capacity * sizeof(stk->labels[0]));
 
-  writer_write_u8(wd, stk->keep_alive);
+  io_write_u8(wd, stk->keep_alive);
   // keep_alive?
 }
 
-void module_save(data_writer * wd, wasm_module * mod){
-  writer_write_u32(wd, markerthing);
+void module_save(io_writer * wd, wasm_module * mod){
+  io_write_u32(wd, markerthing);
 
   u32 stkcnt = 0;
   for(u32 i = 0 ; i < mod->stack_count; i++){
     if(mod->stacks[i] != NULL)
       stkcnt += 1;
   }
-  writer_write_u32(wd, stkcnt);
+  io_write_u32(wd, stkcnt);
   for(u32 i = 0 ; i < mod->stack_count; i++){
     if(mod->stacks[i] != NULL)
       stack_save(wd, mod->stacks[i]);
   }
-  writer_write_u32(wd, mod->global_count);
-  writer_write(wd, mod->globals, mod->global_count * sizeof(u64));
-  writer_write_u64(wd, mod->heap->capacity);
-  writer_write(wd, mod->heap->heap, mod->heap->capacity);
+  io_write_u32(wd, mod->global_count);
+  io_write(wd, mod->globals, mod->global_count * sizeof(u64));
+  io_write_u64(wd, mod->heap->capacity);
+  io_write(wd, mod->heap->heap, mod->heap->capacity);
 }
 
 void awsm_module_save_state(wasm_module * mod, void ** buffer, size_t * size){
@@ -2387,29 +2340,29 @@ void awsm_module_save_state(wasm_module * mod, void ** buffer, size_t * size){
   // assumes the module after load will be the same, so func related things are not touched
   // the global values are saved though.
   // [execution stacks]
-  data_writer writer = {.data = NULL, .size = 0, .offset = 0, .f = NULL};
+  io_writer writer = {.data = NULL, .size = 0, .offset = 0, .f = NULL};
   module_save(&writer, mod);
   *buffer = writer.data;
   *size = writer.offset;
 }
 
-void awsm_module_save(data_writer * wd, wasm_module * mod){
+void awsm_module_save(io_writer * wd, wasm_module * mod){
   module_save(wd, mod);
 }
 
-void frame_load(data_reader * rd, wasm_control_stack_frame * f, stack * stk){
+void frame_load(io_reader * rd, wasm_control_stack_frame * f, stack * stk){
   *f = (wasm_control_stack_frame){0};
-  ASSERT(reader_readu32_fixed(rd) == markerthing);
-  f->block = reader_readi32_fixed(rd);
-  f->label_offset = reader_readu32_fixed(rd);
-  f->stack_pos = reader_readu32_fixed(rd);
-  f->localcount = reader_readu32_fixed(rd);
-  f->retcount = reader_readu32_fixed(rd);
-  f->func_id = reader_readi32_fixed(rd);
+  ASSERT(io_read_u32(rd) == markerthing);
+  f->block = io_read_i32(rd);
+  f->label_offset = io_read_u32(rd);
+  f->stack_pos = io_read_u32(rd);
+  f->localcount = io_read_u32(rd);
+  f->retcount = io_read_u32(rd);
+  f->func_id = io_read_i32(rd);
 
-  u8 type = reader_read1(rd);
-  u32 offset = reader_readu32_fixed(rd);
-  wasm_code_reader * rd2 = &f->rd;
+  u8 type = io_read_u8(rd);
+  u32 offset = io_read_u32(rd);
+  io_reader * rd2 = &f->rd;
   rd2->f = NULL;
   if(type == 0){
     rd2->data = stk->initializer;
@@ -2426,58 +2379,58 @@ void frame_load(data_reader * rd, wasm_control_stack_frame * f, stack * stk){
   }
 }
 
-void stack_load(data_reader * rd, stack * stk){
-  ASSERT(reader_readu32_fixed(rd) == markerthing);
-  stk->stack_ptr = reader_readu32_fixed(rd);
+void stack_load(io_reader * rd, stack * stk){
+  ASSERT(io_read_u32(rd) == markerthing);
+  stk->stack_ptr = io_read_u32(rd);
   stk->stack_capacity = stk->stack_ptr + 1;
   stk->stack = realloc(stk->stack, sizeof(stk->stack[0]) * stk->stack_capacity);
 
-  reader_read(rd, stk->stack, (stk->stack_ptr + 1) * sizeof(stk->stack[0]));
+  io_read(rd, stk->stack, (stk->stack_ptr + 1) * sizeof(stk->stack[0]));
 
-  stk->initializer_size = reader_readu32_fixed(rd);
+  stk->initializer_size = io_read_u32(rd);
   stk->initializer = realloc(stk->initializer, stk->initializer_size);
-  reader_read(rd, stk->initializer, stk->initializer_size);
+  io_read(rd, stk->initializer, stk->initializer_size);
   
-  stk->frame_ptr = reader_readu32_fixed(rd);
+  stk->frame_ptr = io_read_u32(rd);
   stk->frame_capacity = stk->frame_ptr + 1;
   stk->frames = realloc(stk->frames, stk->frame_capacity * sizeof(stk->frames[0]));
   for(u32 i = 0; i <= stk->frame_ptr; i++)
     frame_load(rd, stk->frames + i, stk);
 
-  stk->label_capacity = reader_readu32_fixed(rd);
+  stk->label_capacity = io_read_u32(rd);
   stk->labels = realloc(stk->labels, stk->label_capacity * sizeof(stk->labels[0]));
-  reader_read(rd, stk->labels, stk->label_capacity * sizeof(stk->labels[0]));
+  io_read(rd, stk->labels, stk->label_capacity * sizeof(stk->labels[0]));
 
-  stk->keep_alive = (bool)reader_read1(rd);
+  stk->keep_alive = (bool)io_read_u8(rd);
 
 }
 
-void module_load(data_reader * rd, wasm_module * mod){
-  ASSERT(reader_readu32_fixed(rd) == markerthing);
-  u32 stack_count = reader_readu32_fixed(rd);
+void module_load(io_reader * rd, wasm_module * mod){
+  ASSERT(io_read_u32(rd) == markerthing);
+  u32 stack_count = io_read_u32(rd);
   for(u32 i = 0; i < stack_count; i++){
     wasm_module_add_stack(mod, alloc0(sizeof(mod->stacks[0][0])));
     stack_load(rd, mod->stacks[i]);
   }
-  u32 global_count = reader_readu32_fixed(rd);
+  u32 global_count = io_read_u32(rd);
   if(global_count != mod->global_count)
     ERROR("Global count seems wrong!!\n");
   mod->globals = realloc(mod->globals, sizeof(mod->globals[0]) * mod->global_count);
-  reader_read(rd, mod->globals, global_count * sizeof(mod->globals[0]));
-  mod->heap->capacity = reader_readu64_fixed(rd);
+  io_read(rd, mod->globals, global_count * sizeof(mod->globals[0]));
+  mod->heap->capacity = io_read_u64(rd);
   mod->heap->heap = realloc(mod->heap->heap, mod->heap->capacity);
-  reader_read(rd, mod->heap->heap, mod->heap->capacity);
+  io_read(rd, mod->heap->heap, mod->heap->capacity);
   //ASSERT(rd->offset == rd->size);
 
 }
 
 void awsm_module_load_state(wasm_module * mod, void * buffer, size_t size){
   // loads the heap and the execution stack.
-  data_reader reader = {.data = buffer, .size = size, .offset = 0, .f = 0};
+  io_reader reader = {.data = buffer, .size = size, .offset = 0, .f = 0};
   module_load(&reader, mod);
 }
 
-void awsm_module_load(data_reader * rd, wasm_module * mod){
+void awsm_module_load(io_reader * rd, wasm_module * mod){
   module_load(rd, mod);
 }
 

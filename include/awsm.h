@@ -25,6 +25,23 @@ void awsm_set_error_callback(void (*f)(const char * file, int line, const char *
 
 void awsm_register_function(wasm_module * module, void (* func)(wasm_execution_stack * stack), const char * name);
 
+typedef enum {
+  AWSM_FCN_OPT_NONE = 0,
+  AWSM_FCN_OPT_BLOCKING = 1
+}awsm_fcn_opt;
+
+typedef enum {
+  // return immediately
+  AWSM_BLK_RETURN = 16,
+  // yield the thread
+  AWSM_BLK_YIELD = 32,
+  // select() on a number of fd's. with a timeout
+  // u32 count, [int fds], u32 timeout
+  AWSM_BLK_SELECT = 64
+}awsm_blk_status;
+
+void awsm_register_function2(wasm_module * module, void (* func)(wasm_execution_stack * stack), const char * name, awsm_fcn_opt options);
+
 void awsm_push_i32(wasm_execution_stack * s, int32_t v);
 void awsm_push_i64(wasm_execution_stack * s, int64_t v);
 void awsm_push_u32(wasm_execution_stack * s, uint32_t v);
@@ -61,61 +78,9 @@ wasm_module * awsm_stack_module(wasm_execution_stack * s);
 void awsm_module_set_user_data(wasm_module * mod, void * ptr);
 void * awsm_module_get_user_data(wasm_module * mod);
 
-// binary reader / writer
-typedef struct{
-  // data can either be from the stack initializer code
-  // the module code, or the module heap
-  void * data;
-  union{
-    u64 offset;
-    void * user_data;
-  };
-  u64 size;
-
-  // if its a read op, this reads
-  // if its a write op, this writes
-  void (* f)(void * data, u64 count, void * user_data);
-}binary_io;
-
-typedef binary_io wasm_code_reader;
-typedef binary_io data_writer;
-typedef binary_io data_reader;
-typedef binary_io io_writer;
-typedef binary_io io_reader;
-
-
-void reader_advance(wasm_code_reader * rd, size_t bytes);
-u8 reader_read1(wasm_code_reader * rd);
-u8 reader_peek1(wasm_code_reader * rd);
-void reader_read(wasm_code_reader * rd, void * buffer, size_t len);
-u64 reader_readu64(wasm_code_reader * rd);
-u32 reader_readu32(wasm_code_reader * rd);
-u64 reader_readu64_fixed(wasm_code_reader * rd);
-u32 reader_readu32_fixed(wasm_code_reader * rd);
-i32 reader_readi32_fixed(wasm_code_reader * rd);
-u16 reader_readu16_fixed(wasm_code_reader * rd);
-f32 reader_readf32(wasm_code_reader * rd);
-f64 reader_readf64(wasm_code_reader * rd);
-i64 reader_readi64(wasm_code_reader * rd);
-i32 reader_readi32(wasm_code_reader * rd);
-// caller deallocates the returned string.
-char * reader_readname(wasm_code_reader * rd);
-size_t reader_getloc(wasm_code_reader * rd);
-// caller deallocates the returned string.
-char * reader_read_str(binary_io * io);
-
-
-void writer_write(data_writer * writer, const void * data, size_t count);
-void writer_write_u8(data_writer * wd, u8 value);
-void writer_write_u32(data_writer * wd, u32 value);
-void writer_write_u64(data_writer * wd, u64 value);
-void writer_write_i32(data_writer * wd, i32 value);
-void writer_write_str(data_writer * wd, const char * str);
-
-
 // save/load VM state
-void awsm_module_load(data_reader * rd, wasm_module * mod);
-void awsm_module_save(data_writer * wd, wasm_module * mod);
+void awsm_module_load(io_reader * rd, wasm_module * mod);
+void awsm_module_save(io_writer * wd, wasm_module * mod);
 void awsm_module_save_state(wasm_module * mod, void ** buffer, size_t * size);
 void awsm_module_load_state(wasm_module * mod, void * buffer, size_t size);
 

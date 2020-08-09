@@ -6,6 +6,7 @@
 #include <math.h>
 #include <stdarg.h>
 #include "wasm_instr.h"
+#include "microio.h"
 #include "awsm.h"
 #include "awsm_internal.h"
 
@@ -56,27 +57,27 @@ bool dwarf_debug_line_commit_row(dwarf_debug_line_state_machine * sm, u32 code_o
 }
 
 int dwarf_source_location(u8 * dwarf_code, u32 code_size, u32 code_offset, char * out_filename, int * out_line){
-  wasm_code_reader _rd = { .data = dwarf_code, .offset = 0, .size = code_size};
-  wasm_code_reader * rd = &_rd;
+  io_reader _rd = { .data = dwarf_code, .offset = 0, .size = code_size};
+  io_reader * rd = &_rd;
   
   dwarf_debug_line_state_machine sm = {0};
-  //reader_read1(rd);
-  u32 length = reader_readu32_fixed(rd);
-  u16 version = reader_readu16_fixed(rd);
+  //io_read_u8(rd);
+  u32 length = io_read_u32(rd);
+  u16 version = io_read_u16(rd);
   ASSERT(version == 4);
-  u32 prolog_length = reader_readu32_fixed(rd);
+  u32 prolog_length = io_read_u32(rd);
   UNUSED(prolog_length);
   UNUSED(length);
-  sm.minimum_instr_length = reader_read1(rd);
-  sm.maxmium_ops_per_instr = reader_read1(rd);
-  sm.default_is_stmt = reader_read1(rd);
-  sm.line_base = (i8)reader_read1(rd);
-  sm.line_range = reader_read1(rd);
-  u8 opcode_base = reader_read1(rd);
+  sm.minimum_instr_length = io_read_u8(rd);
+  sm.maxmium_ops_per_instr = io_read_u8(rd);
+  sm.default_is_stmt = io_read_u8(rd);
+  sm.line_base = (i8)io_read_u8(rd);
+  sm.line_range = io_read_u8(rd);
+  u8 opcode_base = io_read_u8(rd);
   u32 opcode_lengths[opcode_base];
   opcode_lengths[0] = 0;
   for(u8 i = 1 ;i < opcode_base; i++){
-    opcode_lengths[i] = reader_readu32(rd);
+    opcode_lengths[i] = io_read_u32_leb(rd);
   }
   UNUSED(opcode_lengths);
   UNUSED(version);
@@ -90,10 +91,10 @@ int dwarf_source_location(u8 * dwarf_code, u32 code_size, u32 code_offset, char 
   //printf("\n");
   while(true){
     // read the dir names  ( unused )x;
-    u8 check = reader_read1(rd);
+    u8 check = io_read_u8(rd);
     if(check == 0)
       break;
-    while(reader_read1(rd) != 0){  }
+    while(io_read_u8(rd) != 0){  }
   }
 
   u8 * file_start;
@@ -101,19 +102,19 @@ int dwarf_source_location(u8 * dwarf_code, u32 code_size, u32 code_offset, char 
   
   while(true){
     // read the file names ( unused )
-    u8 check = reader_read1(rd);
+    u8 check = io_read_u8(rd);
     if(check == 0){
 
       break;
     }
-    while(reader_read1(rd) != 0){
+    while(io_read_u8(rd) != 0){
 
     }
     //u32 offset2 = rd->offset;
 
-    u32 dir = reader_readu32(rd);
-    u32 modified = reader_readu32(rd);
-    u32 filelen = reader_readu32(rd);
+    u32 dir = io_read_u32_leb(rd);
+    u32 modified = io_read_u32_leb(rd);
+    u32 filelen = io_read_u32_leb(rd);
     UNUSED(dir);UNUSED(modified);UNUSED(filelen);
     //printf("FILE: %s %i %i %i\n", rd->data + offset1, dir, modified, filelen);
   }
@@ -131,14 +132,14 @@ int dwarf_source_location(u8 * dwarf_code, u32 code_size, u32 code_offset, char 
   for(int i = 0; i < 100000; i++){
     if(rd->offset ==rd->size || end)
       break;
-    u8 opcode = reader_read1(rd);
+    u8 opcode = io_read_u8(rd);
     //printf("opcode %i\n", opcode);
     
     switch(opcode){
     case 0: // extended opcode
       {
-	u32 len = reader_readu32(rd);
-	u8 code = reader_read1(rd);
+	u32 len = io_read_u32_leb(rd);
+	u8 code = io_read_u8(rd);
 
 	switch(code){
 	case 0:
@@ -153,7 +154,7 @@ int dwarf_source_location(u8 * dwarf_code, u32 code_size, u32 code_offset, char 
 	    
 	case 2: //DW_LNE_set_address  
 	  {
-	    u32 addr = reader_readu32_fixed(rd);
+	    u32 addr = io_read_u32(rd);
 	    //printf("SET ADDRESS: %i\n", addr);
 	    sm.address = addr;
 	    sm.op_index = 0;
@@ -188,20 +189,20 @@ int dwarf_source_location(u8 * dwarf_code, u32 code_size, u32 code_offset, char 
     case 2: // advance pc
       {
 
-	u32 adjusted = reader_readu32(rd);
+	u32 adjusted = io_read_u32_leb(rd);
 	dwarf_debug_line_advance(&sm, adjusted, false);
 	break;
       }
 
     case 3: //Advance Line
       {
-	i32 count = reader_readi32(rd);
+	i32 count = io_read_i32_leb(rd);
 	sm.line += count;
 	break;
       }
     case 5: //DW_LNS_set_column
       {
-	sm.column = reader_readu32(rd);
+	sm.column = io_read_u32_leb(rd);
 	break;
       }
     case 6:{ //negate stmt

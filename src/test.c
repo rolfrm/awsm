@@ -5,45 +5,37 @@
 #include <signal.h>
 
 
-static u64 reader_readu64(u8 * buf){
-  // read LEB128
-  u8 chunk = 0;
-  u64 value = 0;
-  u64 offset = 0;
-  while((chunk = *buf) > 0){
-    value |= (0b01111111L & chunk) << offset;
-    offset += 7;
-    if((u64)(0b10000000L & chunk) == false)
-      break;
-    buf += 1;
-  }
-  return value;
-}
-
-static void encode_u64_leb(u64 value, u8 * buffer){
-  while(true){
-    
-    *buffer = value & 0b01111111L;
-    value >>= 7;
-    if(value)
-      *buffer |= 0b10000000L;
-    else break;
-    buffer += 1;
-  }
-}
-
 bool test_value(u64 value){
   u8 buffer[16] = {0};
-  encode_u64_leb(value, buffer);
-  u64 result = reader_readu64(buffer);
-  printf("%p == %p\n", result, value);
+  binary_io _wdrd = {.data = buffer, .offset = 0, .size = sizeof(buffer)};
+  binary_io * wdrd = &_wdrd;
+  io_write_u64_leb(wdrd, value);
+  wdrd->offset = 0;
+  u64 result = io_read_u64_leb(wdrd);
+  printf("?? %p == %p\n", result, value);
   if(result != value){
     printf("%p == %p\n", result, value);
     return false;
   }
   return true;
-
 }
+
+
+bool test_value_i64(i64 value){
+  u8 buffer[16] = {0};
+  binary_io _wdrd = {.data = buffer, .offset = 0, .size = sizeof(buffer)};
+  binary_io * wdrd = &_wdrd;
+  io_write_i64_leb(wdrd, value);
+  wdrd->offset = 0;
+  i64 result = io_read_i64_leb(wdrd);
+  printf("?? %p == %p\n", result, value);
+  if(result != value){
+    printf("%p == %p\n", result, value);
+    return false;
+  }
+  return true;
+}
+
 void _error(const char * file, int line, const char * msg, ...){
   UNUSED(file);UNUSED(line);UNUSED(msg);
   char buffer[1000];  
@@ -66,6 +58,18 @@ int main(int argc, char ** argv){
     if(!test_value((u64)1 << i | i << (i / 2)))
       return 1;
   }
+
+
+  for(u64 i = 0 ;i < 64; i++){
+    i64 value = (i64)((u64)1 << i | i << (i / 2));
+    printf(":%i (%x)\n", value, value);
+    if(!test_value_i64(value))
+      return 1;
+  }
+
+
+  
+  return 0;
 
   //awsm_log_diagnostic = diagnostic;
   wasm_module * mod = awsm_load_module_from_file("./testlib3.wasm");
