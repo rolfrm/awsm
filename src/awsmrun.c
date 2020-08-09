@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+#include <microio.h>
 #include <awsm.h>
 #include <stdarg.h>
 #include <signal.h>
@@ -140,7 +141,7 @@ int main(int argc, char ** argv){
 
     FILE * f = fopen("partial.dump", "r");
     if(f != NULL){
-      data_reader rd = {. f= read_some, .user_data = f};
+      io_reader rd = {. f= read_some, .user_data = f};
       awsm_module_load(&rd, mod);
       fclose(f);
     }
@@ -148,7 +149,7 @@ int main(int argc, char ** argv){
     if(awsm_process(mod, 10)){
       remove("partial.dump");
       FILE * f = fopen("partial.dump", "w");
-      data_writer rd = {. f= write_some, .user_data = f};
+      io_writer rd = {. f= write_some, .user_data = f};
       awsm_module_save(&rd, mod);
       fclose(f);
     }else{
