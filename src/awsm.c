@@ -1584,7 +1584,7 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
       UNARY_OPF(f32, SIGN);
 
     case WASM_INSTR_F64_ABS: //0x8B,
-      UNARY_OPF(f64, abs);
+      UNARY_OPF(f64, fabs);
     case WASM_INSTR_F64_NEG: //0x8C,
       UNARY_OPF(f64, OP_NEG);
     case WASM_INSTR_F64_CEIL: //0x8D,
