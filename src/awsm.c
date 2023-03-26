@@ -26,6 +26,7 @@ char * io_readname(io_reader * rd){
 u32 reader_getloc(io_reader * rd){return rd->offset;}
 
 void awsm_set_error_callback(void (*f)(const char * file, int line, const char * msg, ...)){
+  
   _error = f;
 }
 
@@ -256,7 +257,7 @@ wasm_module * load_wasm_module(wasm_heap * heap, io_reader * rd){
   wasm_module module = {0};
   module.steps_per_context_switch = AWSM_DEFAULT_STEPS_PER_CONTEXT_SWITCH;
   module.heap = heap;
-  ASSERT(rd->size > 8);
+  ASSERT(rd->size >= 8);
    
   const char * magic_header_test = "\0asm";
   char magic_header[4];
@@ -1049,7 +1050,6 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
       logd("THIS HAPPEND\n");
       break;
     case WASM_INSTR_NOP:
-      ERROR("NOP NOT SUPPORTED");
       break;
     case WASM_INSTR_BLOCK:
       {
@@ -1264,6 +1264,7 @@ int wasm_exec_code2(wasm_execution_stack * ctx, int stepcount){
 	  //f->argcount = fn->argcount;
 	  rd[0] = (io_reader){.data = fn->code, .size = fn->length, .offset = 0, .f = NULL};
 	  u32 l = io_read_u32_leb(rd);
+	  
 	  for(u32 i = 0; i < l; i++){
 	    u32 elemcount = io_read_u32_leb(rd);
 	    u8 type = io_read_u8(rd);
@@ -1968,6 +1969,34 @@ wasm_module * awsm_load_module_from_file(const char * wasm_file){
   return mod;
 }
 
+wasm_module * awsm_load_dynamic_module(){
+
+  wasm_heap * heap = alloc0(sizeof(heap[0]));
+  u8 default_data[] = {0,'a','s','m', 1,0,0,0};
+
+  io_reader rd = {.data = default_data, .size = sizeof(default_data)};
+  wasm_module * mod = load_wasm_module(heap, &rd);
+  awsm_register_function(mod, _print_i32, "print_i32");
+  awsm_register_function(mod, _print_i64, "print_i64");
+  awsm_register_function(mod, _print_str, "print_str");
+  awsm_register_function(mod, _print_f32, "print_f32");
+  awsm_register_function(mod, _print_f64, "print_f64");
+  awsm_register_function(mod, _require_f64, "require_f64");
+  awsm_register_function(mod, _require_f32, "require_f32");
+  awsm_register_function(mod, _require_i64, "require_i64");
+  awsm_register_function(mod, _require_i32, "require_i32");
+  awsm_register_function(mod, _sbrk, "sbrk");
+  awsm_register_function(mod, wasm_fork_stack, "awsm_fork");
+  awsm_register_function(mod, _new_coroutine, "new_coroutine");
+  awsm_register_function(mod, _yield, "yield");
+  awsm_register_function(mod, _get_heap_size, "get_heap_size");
+  awsm_register_function(mod, _set_heap_size, "set_heap_size");
+  awsm_register_function(mod, _wasm_error, "awsm_error");
+  awsm_register_function2(mod, _sleep, "sleep", AWSM_FCN_OPT_BLOCKING);
+  //awsm_set_error_callback(standard_error_callback);
+  return mod;
+
+}
 
 bool awsm_process(wasm_module * module, u64 steps_total){
   

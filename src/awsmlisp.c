@@ -7,6 +7,9 @@
 #include "utils.h"
 #include "lisp.h"
 #include "wasm_instr.h"
+#include "awsm.h"
+#include "awsm_internal.h"
+
 // pattern matching based statically compiled language
 // (+ 1 2)
 // + -> match arguments, like i64 or fixnum.
@@ -47,7 +50,7 @@ lisp_value cdr(lisp_value v){
 bool is_nil(lisp_value v){
   return v.type == LISP_NIL;
 }
-
+void (* _error)(const char * file, int line, const char * msg, ...);
 lisp_value unquote_sym, quote_sym, unquote_splice_sym, quasiquote_sym;
 const lisp_value nil = {0};
 i64 get_symbol_id(const char * symname){
@@ -124,9 +127,17 @@ int main(){
   printf("\n");
   wasm_builder b = {.code = v, .wd = {0}};
   bool x = add_gen1(&b);
-  //wasm_module * mod = awsm_load_dynamic_module();
+  wasm_module * mod = awsm_load_dynamic_module();
+  u8 code[] = {0, WASM_INSTR_I64_CONST, 13, WASM_INSTR_NOP,WASM_INSTR_NOP,WASM_INSTR_NOP,WASM_INSTR_NOP};
+  int helloId = awsm_define_function(mod, "hello", code, 1, 0 ,0);
+  int helloId2 = awsm_define_function(mod, "hello2", code, sizeof(code), 0 ,0);
+  printf("id: %i %i\n", helloId, helloId2);
+  wasm_execution_stack * stack = awsm_load_thread(mod, "hello2");
+  stack->keep_alive = true;
+  awsm_process(mod, 10);
+  printf("T: %i %i %p \n", v.type, x, stack->stack[1]);UNUSED(mod);
+  UNUSED(stack);
   
-  printf("T: %i %i\n", v.type, x);
   UNUSED(v);
   return 0;
 }

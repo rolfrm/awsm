@@ -10,7 +10,7 @@
 #include <unistd.h>
 
 #define UNUSED(x) (void)(x)
-static void _error(const char * file, int line, const char * msg, ...){
+void _error(const char * file, int line, const char * msg, ...){
   UNUSED(file);UNUSED(line);UNUSED(msg);
   char buffer[1000];  
   va_list arglist;
@@ -100,7 +100,7 @@ void write_some(void * data, u64 count, void * ptr){
 
 
 int main(int argc, char ** argv){
-  awsm_set_error_callback(_error);
+  //awsm_set_error_callback(_error);
   char * file = NULL;
   char * entrypoint = NULL;
   bool diagnostic = false;

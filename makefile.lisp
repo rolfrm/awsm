@@ -16,7 +16,7 @@ ifneq ($(BUILD),release)
     OPT = -g3 -O0
 endif
 
-$(TARGET): $(LIB_OBJECTS)
+$(TARGET): $(LIB_OBJECTS) libawsm.a
 	$(CC)  $(LDFLAGS) $(LIB_OBJECTS)  libawsm.a libmicroio/libmicroio.a $(LIBS)  -o $@
 
 release debug:

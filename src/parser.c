@@ -6,6 +6,9 @@
 #include <microio.h>
 #include "utils.h"
 #include "lisp.h"
+#include "wasm_instr.h"
+#include "awsm.h"
+#include "awsm_internal.h"
 
 void * clone(const void * ptr, size_t size){
   void * heapptr = malloc(size);

@@ -189,7 +189,7 @@ int dwarf_source_location(u8 * dwarf_code, u32 code_size, u32 code_offset, char 
 #define MAX(X,Y)(X > Y ? X : Y)
 #define MIN(X,Y)(X < Y ? X : Y)
 #define SIGN(x) (x > 0 ? 1 : (x < 0 ? -1 : 0))
-void (*_error)(const char * file, int line, const char * msg, ...);
+extern void (*_error)(const char * file, int line, const char * msg, ...);
 #define log _log
 #define ERROR(msg,...) if(_error) _error(__FILE__,__LINE__,msg, ##__VA_ARGS__)
 #define ASSERT(expr) if(__builtin_expect(!(expr), 0)){ERROR("Assertion '" #expr "' Failed");}

@@ -1,11 +1,11 @@
 OPT = -g0 -O3
 
 LIB_SOURCES1 = awsm.c dwarf.c 
-LIB_SOURCES = $(addprefix src/, $(LIB_SOURCES1)) libmicroio/src/microio.c
+LIB_SOURCES = $(addprefix src/, $(LIB_SOURCES1))
 
 CC = gcc
 TARGET = libawsm.so
-LIB_OBJECTS =$(LIB_SOURCES:.c=.o)
+LIB_OBJECTS= $(LIB_SOURCES:.c=.o)
 LDFLAGS= -L. $(OPT) -Wall -Wextra  -shared
 LIBS= -lm
 ALL= $(TARGET)
@@ -16,8 +16,12 @@ ifneq ($(BUILD),release)
     OPT = -g3 -O0
 endif
 
-$(TARGET): $(LIB_OBJECTS)
-	$(CC) $(LDFLAGS) $(LIB_OBJECTS) $(LIBS) -o $@
+$(TARGET): $(LIB_OBJECTS) libawsm.a 
+	$(CC) libmicroio/libmicroio.a $(LDFLAGS) $(LIB_OBJECTS) $(LIBS) -o $@
+
+libawsm.a: $(LIB_OBJECTS)
+	ar rcs libawsm.a $(LIB_OBJECTS)
+
 
 release debug:
 	$(MAKE) BUILD=$@

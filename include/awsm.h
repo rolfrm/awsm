@@ -17,6 +17,8 @@ typedef struct _wasm_execution_stack wasm_execution_stack;
 
 // basic interface
 wasm_module * awsm_load_module_from_file(const char * wasm_file);
+wasm_module * awsm_load_dynamic_module();
+              
 bool awsm_process(wasm_module * module, uint64_t steps_total);
 wasm_execution_stack * awsm_load_thread(wasm_module * module, const char * func);
 wasm_execution_stack * awsm_load_thread_arg(wasm_module * module, const char * func, uint32_t arg);
@@ -67,7 +69,8 @@ int awsm_get_function(wasm_module * module, const char * name);
 int awsm_get_function_ret_cnt(wasm_module * module, int id);
 int awsm_get_function_arg_cnt(wasm_module * module, int id);
 
-int awsm_define_function(wasm_module * module, const char * name, void * len, size_t l, int retcnt, int argcnt);
+int awsm_define_function(wasm_module * module, const char * name, void * code, size_t l, int retcnt, int argcnt);
+
 void wasm_execution_stack_keep_alive(wasm_execution_stack * trd, bool keep_alive);
 void awsm_thread_keep_alive(wasm_execution_stack * s, int keep_alive);
 size_t awsm_new_global(wasm_module * module);
