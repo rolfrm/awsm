@@ -1764,7 +1764,7 @@ int awsm_define_function(wasm_module * module, const char * name, void * code, s
     j = wasm_module_add_func(module);
   wasm_function * f = module->func + j;
 
-  if(exists){
+  if(exists && f->code != NULL){
     dealloc(f->code);
   }else{
     f->name = mem_clone(name, strlen(name) + 1);
@@ -1772,7 +1772,7 @@ int awsm_define_function(wasm_module * module, const char * name, void * code, s
 
   f->code = mem_clone(code, len);
   f->length = len;
-  f->module = NULL;//module->name;
+  f->module = NULL;
   f->retcount = retcount;
   f->argcount = argcount;
   return (int) j;
@@ -1783,6 +1783,12 @@ u64 awsm_new_global(wasm_module * module){
   module->global_count += 1;
   module->globals = realloc(module->globals, sizeof(module->globals[0]) * module->global_count);
   return index;
+}
+
+void * awsm_global_ptr(wasm_module * module, u64 id){
+  if(module->global_count <= id)
+	 return NULL;
+  return &module->globals[id];
 }
 
 

@@ -27,6 +27,7 @@ void awsm_set_error_callback(void (*f)(const char * file, int line, const char *
 
 void awsm_register_function(wasm_module * module, void (* func)(wasm_execution_stack * stack), const char * name);
 
+
 typedef enum {
   AWSM_FCN_OPT_NONE = 0,
   AWSM_FCN_OPT_BLOCKING = 1
@@ -71,9 +72,14 @@ int awsm_get_function_arg_cnt(wasm_module * module, int id);
 
 int awsm_define_function(wasm_module * module, const char * name, void * code, size_t l, int retcnt, int argcnt);
 
+int awsm_define_global_i64(wasm_module * module, i64 value);
+
+
+
 void wasm_execution_stack_keep_alive(wasm_execution_stack * trd, bool keep_alive);
 void awsm_thread_keep_alive(wasm_execution_stack * s, int keep_alive);
 size_t awsm_new_global(wasm_module * module);
+void * awsm_global_ptr(wasm_module * module, u64 id);
 void * awsm_module_heap_ptr(wasm_module * mod);
 size_t awsm_heap_size(wasm_module * mod);
 void awsm_heap_increase(wasm_module * mod, size_t amount);

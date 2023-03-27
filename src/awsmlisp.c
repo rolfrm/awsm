@@ -128,14 +128,34 @@ int main(){
   wasm_builder b = {.code = v, .wd = {0}};
   bool x = add_gen1(&b);
   wasm_module * mod = awsm_load_dynamic_module();
-  u8 code[] = {0, WASM_INSTR_I64_CONST, 13, WASM_INSTR_NOP,WASM_INSTR_NOP,WASM_INSTR_NOP,WASM_INSTR_NOP};
+  u8 code[] = {0, WASM_INSTR_I64_CONST, 55, WASM_INSTR_I64_CONST, 55, WASM_INSTR_I64_ADD, WASM_INSTR_NOP,WASM_INSTR_NOP,WASM_INSTR_NOP,WASM_INSTR_NOP};
+
+  u64 g1 = awsm_new_global(mod);
+  i64 * x2 = awsm_global_ptr(mod, g1);
+  *x2 = 1000;
+
+  u64 g2 = awsm_new_global(mod);
+  x2 = awsm_global_ptr(mod, g2);
+  *x2 = 130000;
+  
+  
+  io_writer cwriter = {0};
+  io_write_u8(&cwriter, 0);
+  io_write_u8(&cwriter, WASM_INSTR_GLOBAL_GET);
+  io_write_u64_leb(&cwriter, g1);
+  io_write_u8(&cwriter, WASM_INSTR_GLOBAL_GET);
+  io_write_u64_leb(&cwriter, g2);
+  io_write_u8(&cwriter, WASM_INSTR_I64_ADD);
+  
+
+  
   int helloId = awsm_define_function(mod, "hello", code, 1, 0 ,0);
-  int helloId2 = awsm_define_function(mod, "hello2", code, sizeof(code), 0 ,0);
+  int helloId2 = awsm_define_function(mod, "hello2", cwriter.data, cwriter.offset, 0 ,0);
   printf("id: %i %i\n", helloId, helloId2);
   wasm_execution_stack * stack = awsm_load_thread(mod, "hello2");
   stack->keep_alive = true;
   awsm_process(mod, 10);
-  printf("T: %i %i %p \n", v.type, x, stack->stack[1]);UNUSED(mod);
+  printf("T: %i %i %i \n", v.type, x, stack->stack[1]);UNUSED(mod);
   UNUSED(stack);
   
   UNUSED(v);
